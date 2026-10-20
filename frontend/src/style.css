@@ -1,0 +1,133 @@
+@import "tailwindcss";
+@import url("https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap");
+
+
+.nav {
+  background: var(--side);
+  color: var(--sidetxt);
+  width: 230px;
+  min-height: 100vh;
+  padding: 1.2rem 0.8rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  position: sticky;
+  top: 0;
+  height: 100vh;
+}
+
+.nav-brand {
+  color: #fff;
+  font-weight: 600;
+  font-size: 1.15rem;
+  padding: 0.2rem 0.7rem 1.2rem;
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.nav-link {
+  color: inherit;
+  text-decoration: none;
+  padding: 0.55rem 0.7rem;
+  border-radius: 6px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.nav-link:hover { background: #1a312e; }
+.nav-link.active { background: #1f3b38; color: #fff; }
+
+.nav-badge {
+  background: var(--bad);
+  color: #fff;
+  border-radius: 99px;
+  font-size: 12px;
+  padding: 0 0.5rem;
+}
+
+.nav-user {
+  margin-top: auto;
+  padding: 0.7rem;
+  font-size: 13px;
+  border-top: 1px solid #22403d;
+}
+.nav-user strong { color: #fff; }
+
+.nav-logout {
+  margin-top: 0.6rem;
+  width: 100%;
+  background: transparent;
+  color: #fff;
+  border: 1px solid #2f524e;
+  border-radius: 6px;
+  padding: 0.3rem 0.7rem;
+  font-size: 13px;
+  cursor: pointer;
+}
+.nav-logout:hover { background: #1a312e; }
+
+/* Mobile: becomes a top bar that wraps */
+@media (max-width: 800px) {
+  .nav {
+    width: 100%;
+    min-height: auto;
+    height: auto;
+    position: static;
+    flex-direction: row;
+    flex-wrap: wrap;
+    padding: 0.6rem;
+  }
+  .nav-brand { width: 100%; padding: 0.3rem 0.5rem; }
+  .nav-link { padding: 0.4rem 0.6rem; }
+  .nav-user { margin: 0; border: 0; padding: 0.3rem 0.5rem; width: 100%; display: flex; gap: .8rem; align-items: center; }
+  .nav-user small { display: none; }
+  .nav-logout { margin: 0 0 0 auto; width: auto; }
+}
+
+
+/* Import once in main.jsx:  import './theme.css' */
+
+
+:root {
+  --bg: #eef1ef;
+  --panel: #fff;
+  --ink: #16211f;
+  --mute: #5d6b67;
+  --line: #d5dcd9;
+  --brand: #0f5c57;
+  --brand-ink: #fff;
+  --ok: #1b7a3d;
+  --okbg: #e0f2e6;
+  --bad: #b3261e;
+  --badbg: #fbe4e1;
+  --side: #10201e;
+  --sidetxt: #b9c8c4;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0e1514;
+    --panel: #16201f;
+    --ink: #e6eeec;
+    --mute: #94a5a1;
+    --line: #2b3a38;
+    --brand: #3fb5a8;
+    --brand-ink: #06201d;
+    --ok: #6fd092;
+    --okbg: #14301f;
+    --bad: #ff8a80;
+    --badbg: #3a1a17;
+    --side: #0a100f;
+  }
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font: 15px/1.5 "IBM Plex Sans", system-ui, sans-serif;
+}
+button { font: inherit; }
+:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }

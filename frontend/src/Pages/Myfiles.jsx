@@ -39,10 +39,10 @@ export default function MyFiles() {
           onDragOver={(e) => { e.preventDefault(); setOver(true); }}
           onDragLeave={() => setOver(false)}
           onDrop={(e) => { e.preventDefault(); setOver(false); if (!busy) add([...e.dataTransfer.files]); }}
-          className={`block cursor-pointer rounded-lg border-2 border-dashed p-8 text-center hover:border-brand ${over ? "border-brand bg-bg" : "border-line"}`}
+          className={`drop${over ? " over" : ""}`}
         >
-          <input type="file" multiple className="sr-only" disabled={busy} onChange={(e) => { add([...e.target.files]); e.target.value = ""; }} />
-          <b>{busy ? "Registering…" : "Choose files to register"}</b><br /><span className="text-sm text-mute">or drop them here (max 50 MB each)</span>
+          <input type="file" multiple disabled={busy} onChange={(e) => { add([...e.target.files]); e.target.value = ""; }} />
+          <b>{busy ? "Registering…" : "Choose files to register"}</b><br /><span className="hs">or drop them here</span>
         </label>
         <FormError>{err}</FormError>
       </Panel>

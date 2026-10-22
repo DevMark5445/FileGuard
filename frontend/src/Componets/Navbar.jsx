@@ -1,10 +1,12 @@
-export default function Navbar({ alertCount = 0 }) {
+import { NavLink } from "react-router-dom";
+
+export default function Navbar({ alertCount = 0, user, onSignOut }) {
   const links = [
-    { href: '#', label: 'Dashboard' },
-    { href: '#files', label: 'My files' },
-    { href: '#verify', label: 'Verify a file' },
-    { href: '#history', label: 'History & alerts', badge: alertCount },
-    { href: '#admin', label: 'Admin' },
+    { to: "/", label: "Dashboard", end: true },
+    { to: "/files", label: "My files" },
+    { to: "/verify", label: "Verify a file" },
+    { to: "/history", label: "History & alerts", badge: alertCount },
+    ...(user?.role === "admin" ? [{ to: "/admin", label: "Admin" }] : []),
   ];
 
   return (
@@ -13,25 +15,28 @@ export default function Navbar({ alertCount = 0 }) {
         <span aria-hidden="true">&#9670;</span> FileGuard
       </div>
 
-      {links.map(({ href, label, badge }) => (
-        <a key={href} href={href} className="nav-link">
+      {links.map(({ to, label, badge, end }) => (
+        <NavLink
+          key={to}
+          to={to}
+          end={end}
+          className={({ isActive }) => `nav-link${isActive ? " active" : ""}`}
+        >
           {label}
           {badge > 0 && <span className="nav-badge">{badge}</span>}
-        </a>
+        </NavLink>
       ))}
 
       <div className="nav-user">
-        <strong>Demo User</strong>
-        <small>
-          <br />
-          demo@fileguard.io
-          <br />
-          Administrator
-        </small>
-        <button type="button" className="nav-logout">
+        <strong>{user?.name}</strong>
+        <small>{user?.email}<br />{user?.role === "admin" ? "Administrator" : "User"}</small>
+        <button type="button" className="nav-logout" onClick={onSignOut}>
           Sign out
         </button>
       </div>
+      <button type="button" className="nav-logout nav-logout-mobile" onClick={onSignOut}>
+        Sign out
+      </button>
     </nav>
   );
 }

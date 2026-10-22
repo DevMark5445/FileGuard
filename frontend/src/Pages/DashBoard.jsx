@@ -16,21 +16,21 @@ export default function Dashboard() {
     <>
       <PageHead title="Dashboard" sub="The state of your registered files." />
       {open > 0 && (
-        <div role="alert" className="mb-6 rounded-lg border border-bad bg-badbg p-4">
+        <div role="alert" className="result bad dashboard-alert">
           <h3 className="font-semibold">{open} modified file{open > 1 ? "s" : ""} need your attention</h3>
           <Link to="/history" className="underline">Review alerts</Link>
         </div>
       )}
-      <div className="mb-6 grid grid-cols-[repeat(auto-fit,minmax(170px,1fr))] gap-4">
+      <div className="stats">
         <Stat n={files.length} label="Files monitored" />
         <Stat n={logs.length} label="Checks run" />
-        <Stat n={logs.length - mod.length} label="Unchanged results" tone="text-ok" />
+        <Stat n={logs.length - mod.length} label="Intact results" tone="text-ok" />
         <Stat n={mod.length} label="Modified results" tone="text-bad" />
       </div>
       <Panel title="Recent checks"><LogTable logs={logs.slice(0, 5)} /></Panel>
-      <div className="flex flex-wrap gap-3">
-        <Link to="/files" className="rounded-md bg-brand px-4 py-2 font-medium text-brand-ink">Register a file</Link>
-        <Link to="/verify" className="rounded-md border border-line px-4 py-2 font-medium">Verify a file</Link>
+      <div className="row dashboard-actions">
+        <Link to="/files" className="btn">Register a file</Link>
+        <Link to="/verify" className="btn ghost">Verify a file</Link>
       </div>
     </>
   );

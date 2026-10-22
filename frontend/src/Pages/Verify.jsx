@@ -19,7 +19,7 @@ export default function Verify() {
     if (!file) return setErr("Select the current copy of the file to check.");
     if (file.size > MAX_SIZE) return setErr("File is over 50 MB.");
     setBusy(true);
-    try { setRes(await api.verify(id || files[0].id, file)); refreshAlerts(); }
+    try { setRes(await api.verify(id || files[0].id, file)); await refreshAlerts(); }
     catch (x) { setErr(errMsg(x)); }
     finally { setBusy(false); }
   };
@@ -47,7 +47,7 @@ export default function Verify() {
             <FormError>{err}</FormError>
             <Button onClick={run} disabled={busy}>{busy ? "Checking…" : "Verify file"}</Button>
             {res && (
-              <div role="alert" className={`mt-4 rounded-lg border p-5 ${ok ? "border-ok bg-okbg" : "border-bad bg-badbg"}`}>
+              <div role="alert" className={`result ${ok ? "ok" : "bad"}`}>
                 <h3 className="mb-1 text-base font-semibold">{ok ? "File is unchanged" : "Security alert: file has been modified"}</h3>
                 <p>{ok ? `${res.fileName} matches the hash saved when it was registered.` : `${res.fileName} no longer matches its registered hash. It may have been edited, corrupted, or tampered with.`}</p>
                 <dl className="mt-3 grid gap-2 break-all font-mono text-xs">

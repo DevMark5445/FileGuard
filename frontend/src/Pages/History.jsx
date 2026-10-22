@@ -15,7 +15,7 @@ export default function History() {
   const open = logs.filter((l) => l.result === "modified" && !l.reviewed);
   const review = async (id) => {
     setErr("");
-    try { await api.reviewLog(id); reload(); refreshAlerts(); }
+    try { await api.reviewLog(id); reload(); await refreshAlerts(); }
     catch (x) { setErr(errMsg(x)); }
   };
   return (

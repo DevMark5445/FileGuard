@@ -1,3 +1,5 @@
+import { PageSkeleton } from "./Skeleton.jsx";
+
 export function PageHead({ title, sub }) {
   return (
     <header className="page-head">
@@ -29,7 +31,7 @@ export function FormError({ children }) {
 }
 
 export function Spinner() {
-  return <div className="empty" role="status">Loading…</div>;
+  return <PageSkeleton />;
 }
 
 export function Button({ children, ...props }) {

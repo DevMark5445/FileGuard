@@ -17,6 +17,7 @@ import MyFiles from "./Pages/Myfiles.jsx";
 import Verify from "./Pages/Verify.jsx";
 import SuperAdmin from "./Pages/SuperAdmin.jsx";
 import Recover from "./Pages/Recover.jsx";
+import { AppSkeleton } from "./components/Skeleton.jsx";
 
 function AppLayout({ user, onSignOut }) {
   const [alertCount, setAlertCount] = useState(0);
@@ -117,7 +118,7 @@ function AppContent() {
   return (
     <BrowserRouter>
       {!authReady ? (
-        <p className="startup-loading" role="status">Loading FileGuard…</p>
+        <AppSkeleton />
       ) : authError ? (
         <p className="startup-error" role="alert">{authError}</p>
       ) : (

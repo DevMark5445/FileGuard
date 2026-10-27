@@ -1,0 +1,483 @@
+const mongoose = require("mongoose");
+const User = require("../models/User");
+const FileRecord = require("../models/FileRecord");
+const ActivityLog = require("../models/ActivityLog");
+const SecurityIncident = require("../models/SecurityIncident");
+const SystemSetting = require("../models/SystemSetting");
+const { formatFile } = require("./fileController");
+const { recordActivity } = require("../utils/audit");
+
+const publicUser = (user) => ({
+  id: user.id,
+  name: user.name,
+  email: user.email,
+  role: user.role,
+  status: user.status,
+  created: user.createdAt.toISOString(),
+  lastUpdated: user.updatedAt.toISOString(),
+});
+
+function parseLimit(value, fallback = 100) {
+  const parsed = Number.parseInt(value, 10);
+  return Number.isInteger(parsed) ? Math.min(Math.max(parsed, 1), 500) : fallback;
+}
+
+function parseSkip(value) {
+  const parsed = Number.parseInt(value, 10);
+  return Number.isInteger(parsed) ? Math.min(Math.max(parsed, 0), 1000000) : 0;
+}
+
+async function getOverview(req, res, next) {
+  try {
+    const [totalUsers, activeUsers, admins, superadmins, totalFiles, modifiedFiles, verified, modified, openIncidents, recentActivity] = await Promise.all([
+      User.countDocuments(),
+      User.countDocuments({ status: "active" }),
+      User.countDocuments({ role: "admin" }),
+      User.countDocuments({ role: "superadmin" }),
+      FileRecord.countDocuments(),
+      FileRecord.countDocuments({ latestStatus: "modified" }),
+      ActivityLog.countDocuments({ event: "file.verified" }),
+      ActivityLog.countDocuments({ event: "file.modified" }),
+      SecurityIncident.countDocuments({ status: { $ne: "resolved" } }),
+      ActivityLog.find().sort({ createdAt: -1 }).limit(12).populate("actorId", "name email"),
+    ]);
+
+    return res.json({
+      stats: { totalUsers, activeUsers, admins, superadmins, totalFiles, modifiedFiles, verified, modified, openIncidents },
+      recentActivity: recentActivity.map(formatActivity),
+    });
+  } catch (error) {
+    return next(error);
+  }
+}
+
+async function listUsers(req, res, next) {
+  try {
+    const filter = {};
+    if (req.query.role !== undefined) {
+      if (!["user", "admin", "superadmin"].includes(req.query.role)) {
+        return res.status(400).json({ message: "Choose a valid user role filter." });
+      }
+      filter.role = req.query.role;
+    }
+    if (req.query.status !== undefined) {
+      if (!["active", "deactivated", "suspended"].includes(req.query.status)) {
+        return res.status(400).json({ message: "Choose a valid account status filter." });
+      }
+      filter.status = req.query.status;
+    }
+    if (req.query.query !== undefined &&
+        (typeof req.query.query !== "string" || req.query.query.length > 100)) {
+      return res.status(400).json({ message: "Search text must be 100 characters or fewer." });
+    }
+    if (typeof req.query.query === "string" && req.query.query.trim()) {
+      const escaped = req.query.query.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      filter.$or = [
+        { name: new RegExp(escaped, "i") },
+        { email: new RegExp(escaped, "i") },
+      ];
+    }
+    const limit = parseLimit(req.query.limit);
+    const skip = parseSkip(req.query.skip);
+    const [users, total] = await Promise.all([
+      User.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit),
+      User.countDocuments(filter),
+    ]);
+    return res.json({ users: users.map(publicUser), total, limit, skip });
+  } catch (error) {
+    return next(error);
+  }
+}
+
+async function getUser(req, res, next) {
+  try {
+    const user = await User.findById(req.params.id);
+    if (!user) return res.status(404).json({ message: "User account not found." });
+    const [fileCount, activity] = await Promise.all([
+      FileRecord.countDocuments({ owner: user.id }),
+      ActivityLog.find({ $or: [{ actorId: user.id }, { targetUserId: user.id }] })
+        .sort({ createdAt: -1 }).limit(20),
+    ]);
+    return res.json({
+      user: publicUser(user),
+      fileCount,
+      recentActivity: activity.map(formatActivity),
+    });
+  } catch (error) {
+    if (error.name === "CastError") return res.status(404).json({ message: "User account not found." });
+    return next(error);
+  }
+}
+
+async function updateUserStatus(req, res, next) {
+  const { status, reason = "" } = req.body || {};
+  if (!["active", "deactivated", "suspended"].includes(status)) {
+    return res.status(400).json({ message: "Status must be active, deactivated, or suspended." });
+  }
+  if (typeof reason !== "string" || reason.length > 500) {
+    return res.status(400).json({ message: "Reason must be 500 characters or fewer." });
+  }
+  if (req.params.id === req.user.id) {
+    return res.status(400).json({ message: "You cannot change your own account status." });
+  }
+
+  try {
+    const user = await User.findOneAndUpdate(
+      { _id: req.params.id, role: { $ne: "superadmin" } },
+      { $set: { status }, $inc: { tokenVersion: 1 } },
+      { new: true, runValidators: true }
+    ).select("+tokenVersion");
+    if (!user) return res.status(404).json({ message: "Manageable user account not found." });
+    await recordActivity(req, {
+      event: "user.status.updated",
+      severity: status === "active" ? "info" : "warning",
+      targetUserId: user.id,
+      details: { status, reason },
+    });
+    return res.json({ user: publicUser(user) });
+  } catch (error) {
+    if (error.name === "CastError") return res.status(404).json({ message: "Manageable user account not found." });
+    return next(error);
+  }
+}
+
+async function updateUserRole(req, res, next) {
+  const { role } = req.body || {};
+  if (!["user", "admin"].includes(role)) {
+    return res.status(400).json({ message: "Role must be user or admin. Super-admin privileges cannot be assigned." });
+  }
+  if (req.params.id === req.user.id) {
+    return res.status(400).json({ message: "You cannot change your own role." });
+  }
+
+  try {
+    const user = await User.findOneAndUpdate(
+      { _id: req.params.id, role: { $ne: "superadmin" } },
+      { $set: { role }, $inc: { tokenVersion: 1 } },
+      { new: true, runValidators: true }
+    ).select("+tokenVersion");
+    if (!user) return res.status(404).json({ message: "Manageable user account not found." });
+    await recordActivity(req, {
+      event: "user.role.updated",
+      severity: "warning",
+      targetUserId: user.id,
+      details: { role },
+    });
+    return res.json({ user: publicUser(user) });
+  } catch (error) {
+    if (error.name === "CastError") return res.status(404).json({ message: "Manageable user account not found." });
+    return next(error);
+  }
+}
+
+async function deleteUser(req, res, next) {
+  if (req.params.id === req.user.id) {
+    return res.status(400).json({ message: "You cannot delete your own account." });
+  }
+  try {
+    const user = await User.findOne({ _id: req.params.id, role: { $ne: "superadmin" } });
+    if (!user) return res.status(404).json({ message: "Manageable user account not found." });
+
+    const fileIds = await FileRecord.find({ owner: user.id }).distinct("_id");
+    await     await Promise.all([
+      FileRecord.deleteMany({ owner: user.id }),
+      ActivityLog.updateMany(
+          { $or: [{ actorId: user.id }, { targetUserId: user.id }, { targetFileId: { $in: fileIds } }] },
+          { $unset: { actorId: "", targetUserId: "", targetFileId: "" }, $set: { actorEmail: "", details: { redacted: true } } }
+      ),
+      User.deleteOne({ _id: user.id }),
+    ]);
+    await recordActivity(req, {
+      event: "user.deleted",
+      severity: "warning",
+      details: { deletedUserId: user.id },
+    });
+    return res.json({ message: "User and associated registered-file metadata deleted." });
+  } catch (error) {
+    if (error.name === "CastError") return res.status(404).json({ message: "Manageable user account not found." });
+    return next(error);
+  }
+}
+
+async function listFiles(req, res, next) {
+  try {
+    const limit = parseLimit(req.query.limit);
+    const skip = parseSkip(req.query.skip);
+    const [files, total] = await Promise.all([
+      FileRecord.find().sort({ createdAt: -1 }).skip(skip).limit(limit).populate("owner", "name email"),
+      FileRecord.countDocuments(),
+    ]);
+    return res.json({ files: files.map(formatFile), total, limit, skip });
+  } catch (error) {
+    return next(error);
+  }
+}
+
+function formatActivity(log) {
+  return {
+    id: log.id,
+    event: log.event,
+    severity: log.severity,
+    actorId: log.actorId?._id?.toString() || log.actorId?.toString() || null,
+    actorName: log.actorId?.name || log.actorEmail || "System",
+    actorEmail: log.actorId?.email || log.actorEmail || "",
+    targetUserId: log.targetUserId?.toString() || null,
+    targetFileId: log.targetFileId?.toString() || null,
+    details: log.details || {},
+    ip: log.ip,
+    date: log.createdAt.toISOString(),
+  };
+}
+
+async function listActivity(req, res, next) {
+  try {
+    const filter = {};
+    if (req.query.severity !== undefined &&
+        !["info", "warning", "high", "alerts"].includes(req.query.severity)) {
+      return res.status(400).json({ message: "Choose a valid activity severity filter." });
+    }
+    if (req.query.event !== undefined &&
+        (typeof req.query.event !== "string" || req.query.event.length > 80)) {
+      return res.status(400).json({ message: "Choose a valid activity event filter." });
+    }
+    if (req.query.severity === "alerts") {
+      filter.severity = { $in: ["warning", "high"] };
+    } else if (["info", "warning", "high"].includes(req.query.severity)) {
+      filter.severity = req.query.severity;
+    }
+    if (typeof req.query.event === "string" && req.query.event) filter.event = req.query.event;
+    const limit = parseLimit(req.query.limit);
+    const skip = parseSkip(req.query.skip);
+    const [activity, total] = await Promise.all([
+      ActivityLog.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit).populate("actorId", "name email"),
+      ActivityLog.countDocuments(filter),
+    ]);
+    return res.json({ activity: activity.map(formatActivity), total, limit, skip });
+  } catch (error) {
+    return next(error);
+  }
+}
+
+async function listIncidents(req, res, next) {
+  try {
+    const incidents = await SecurityIncident.find().sort({ updatedAt: -1 })
+      .populate("createdBy", "name email")
+      .populate("notes.author", "name email")
+      .populate("affectedUsers", "name email role status")
+      .populate("affectedFiles", "name latestStatus owner");
+    return res.json({ incidents });
+  } catch (error) {
+    return next(error);
+  }
+}
+
+async function createIncident(req, res, next) {
+  const { title, description, severity = "medium", affectedUsers = [], affectedFiles = [] } = req.body || {};
+  if (typeof title !== "string" || !title.trim() || title.trim().length > 160) {
+    return res.status(400).json({ message: "Incident title is required and must be 160 characters or fewer." });
+  }
+  if (typeof description !== "string" || !description.trim() || description.trim().length > 4000) {
+    return res.status(400).json({ message: "Incident description is required and must be 4,000 characters or fewer." });
+  }
+  if (!["low", "medium", "high", "critical"].includes(severity)) {
+    return res.status(400).json({ message: "Choose a valid incident severity." });
+  }
+  if (!Array.isArray(affectedUsers) || affectedUsers.length > 50 ||
+      !Array.isArray(affectedFiles) || affectedFiles.length > 100 ||
+      [...affectedUsers, ...affectedFiles].some((id) => typeof id !== "string" || !mongoose.Types.ObjectId.isValid(id))) {
+    return res.status(400).json({ message: "Affected account and file references must be valid IDs." });
+  }
+  try {
+    const [existingUsers, existingFiles] = await Promise.all([
+      User.countDocuments({ _id: { $in: affectedUsers } }),
+      FileRecord.countDocuments({ _id: { $in: affectedFiles } }),
+    ]);
+    if (existingUsers !== new Set(affectedUsers).size || existingFiles !== new Set(affectedFiles).size) {
+      return res.status(400).json({ message: "One or more affected account or file IDs do not exist." });
+    }
+    const incident = await SecurityIncident.create({
+      title: title.trim(),
+      description: description.trim(),
+      severity,
+      affectedUsers: [...new Set(affectedUsers)],
+      affectedFiles: [...new Set(affectedFiles)],
+      createdBy: req.user.id,
+    });
+    await recordActivity(req, {
+      event: "incident.created",
+      severity: severity === "critical" || severity === "high" ? "high" : "info",
+      details: { incidentId: incident.id, title: incident.title },
+    });
+    return res.status(201).json({ incident });
+  } catch (error) {
+    return next(error);
+  }
+}
+
+async function updateIncident(req, res, next) {
+  const { status, note } = req.body || {};
+  if (!["open", "investigating", "resolved"].includes(status)) {
+    return res.status(400).json({ message: "Choose a valid incident status." });
+  }
+  if (note !== undefined && (typeof note !== "string" || !note.trim() || note.length > 2000)) {
+    return res.status(400).json({ message: "Investigation notes must be 1–2,000 characters." });
+  }
+  try {
+    const incident = await SecurityIncident.findById(req.params.id);
+    if (!incident) return res.status(404).json({ message: "Security incident not found." });
+    incident.status = status;
+    incident.resolvedAt = status === "resolved" ? new Date() : null;
+    if (note) incident.notes.push({ author: req.user.id, text: note.trim() });
+    await incident.save();
+    await recordActivity(req, {
+      event: "incident.updated",
+      details: { incidentId: incident.id, status, noteAdded: Boolean(note) },
+    });
+    return res.json({ incident });
+  } catch (error) {
+    if (error.name === "CastError") return res.status(404).json({ message: "Security incident not found." });
+    return next(error);
+  }
+}
+
+const defaultSettings = {
+  permittedFileTypes: ["*"],
+  maximumFileSize: 50 * 1024 * 1024,
+  sessionTimeoutMinutes: 24 * 60,
+  securityNotifications: true,
+  minimumPasswordLength: 8,
+  passwordRequiresLetterAndNumber: true,
+};
+
+async function getSettings(req, res, next) {
+  try {
+    const settings = await SystemSetting.findOneAndUpdate(
+      { key: "global" },
+      { $setOnInsert: { key: "global" } },
+      { new: true, upsert: true, setDefaultsOnInsert: true }
+    );
+    return res.json({ settings: { ...defaultSettings, ...settings.toObject(), id: settings.id } });
+  } catch (error) {
+    return next(error);
+  }
+}
+
+async function updateSettings(req, res, next) {
+  const body = req.body || {};
+  const {
+    permittedFileTypes,
+    maximumFileSize,
+    sessionTimeoutMinutes,
+    securityNotifications,
+    minimumPasswordLength,
+    passwordRequiresLetterAndNumber,
+  } = body;
+
+  if (!Array.isArray(permittedFileTypes) || permittedFileTypes.length > 100 ||
+      permittedFileTypes.some((type) => typeof type !== "string" || !/^(?:\*|\.[a-z\d]{1,12})$/i.test(type))) {
+    return res.status(400).json({ message: "File types must be `*` or extensions such as `.pdf`." });
+  }
+  if (!Number.isSafeInteger(maximumFileSize) || maximumFileSize < 1 || maximumFileSize > 1024 * 1024 * 1024) {
+    return res.status(400).json({ message: "Maximum file size must be between 1 byte and 1 GB." });
+  }
+  if (!Number.isInteger(sessionTimeoutMinutes) || sessionTimeoutMinutes < 5 || sessionTimeoutMinutes > 30 * 24 * 60) {
+    return res.status(400).json({ message: "Session timeout must be between 5 minutes and 30 days." });
+  }
+  if (typeof securityNotifications !== "boolean" ||
+      !Number.isInteger(minimumPasswordLength) || minimumPasswordLength < 8 || minimumPasswordLength > 128 ||
+      typeof passwordRequiresLetterAndNumber !== "boolean") {
+    return res.status(400).json({ message: "Review the security notification and account policy values." });
+  }
+
+  try {
+    const settings = await SystemSetting.findOneAndUpdate(
+      { key: "global" },
+      { $set: {
+        permittedFileTypes: [...new Set(permittedFileTypes.map((type) => type.toLowerCase()))],
+        maximumFileSize,
+        sessionTimeoutMinutes,
+        securityNotifications,
+        minimumPasswordLength,
+        passwordRequiresLetterAndNumber,
+      } },
+      { new: true, upsert: true, runValidators: true, setDefaultsOnInsert: true }
+    );
+    await recordActivity(req, {
+      event: "settings.updated",
+      severity: "warning",
+      details: { changedSettings: Object.keys(body) },
+    });
+    return res.json({ settings });
+  } catch (error) {
+    return next(error);
+  }
+}
+
+async function exportReport(req, res, next) {
+  try {
+    const now = new Date();
+    const defaultFrom = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+    if ((req.query.from && typeof req.query.from !== "string") ||
+        (req.query.to && typeof req.query.to !== "string")) {
+      return res.status(400).json({ message: "Choose a valid report start and end date." });
+    }
+    const from = req.query.from ? new Date(req.query.from) : defaultFrom;
+    const to = req.query.to ? new Date(req.query.to) : now;
+    if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime()) || from > to) {
+      return res.status(400).json({ message: "Choose a valid report start and end date." });
+    }
+    if (/^\d{4}-\d{2}-\d{2}$/.test(req.query.to || "")) to.setUTCDate(to.getUTCDate() + 1);
+    const range = { $gte: from, $lt: to };
+    const adminIds = await User.find({ role: { $in: ["admin", "superadmin"] } }).distinct("_id");
+    const [users, files, activity, incidents] = await Promise.all([
+      User.countDocuments({ createdAt: range }),
+      FileRecord.countDocuments({ createdAt: range }),
+      ActivityLog.aggregate([
+        { $match: { event: { $in: ["file.verified", "file.modified"] }, createdAt: range } },
+        { $group: { _id: "$event", count: { $sum: 1 } } },
+      ]),
+      SecurityIncident.countDocuments({ createdAt: range }),
+    ]);
+    const verificationCounts = Object.fromEntries(activity.map(({ _id, count }) => [_id, count]));
+    const adminActivities = await ActivityLog.countDocuments({
+      actorId: { $in: adminIds },
+      createdAt: range,
+      event: { $in: ["admin.created", "admin.access.reset_requested", "user.status.updated", "user.role.updated", "user.deleted", "settings.updated", "incident.created", "incident.updated", "auth.mfa.enabled", "auth.mfa.setup.started"] },
+    });
+    const rows = [
+      ["Metric", "Value"],
+      ["Report period start", from.toISOString()],
+      ["Report period end", to.toISOString()],
+      ["Registered users", users],
+      ["Monitored files", files],
+      ["Successful verifications", verificationCounts["file.verified"] || 0],
+      ["Detected modifications", verificationCounts["file.modified"] || 0],
+      ["Security incidents", incidents],
+      ["Administrator activities", adminActivities],
+      ["Report generated at", now.toISOString()],
+    ];
+    const csv = rows.map((row) => row.map((field) => `"${String(field).replace(/"/g, '""')}"`).join(",")).join("\r\n");
+    res.set("Content-Type", "text/csv; charset=utf-8");
+    res.set("Content-Disposition", 'attachment; filename="fileguard-report.csv"');
+    return res.send(csv);
+  } catch (error) {
+    return next(error);
+  }
+}
+
+module.exports = {
+  getOverview,
+  listUsers,
+  getUser,
+  updateUserStatus,
+  updateUserRole,
+  deleteUser,
+  listFiles,
+  listActivity,
+  listIncidents,
+  createIncident,
+  updateIncident,
+  getSettings,
+  updateSettings,
+  exportReport,
+};

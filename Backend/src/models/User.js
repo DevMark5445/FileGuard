@@ -29,11 +29,23 @@ const userSchema = new mongoose.Schema(
       default: "user",
       required: true,
     },
+    status: {
+      type: String,
+      enum: ["active", "deactivated", "suspended"],
+      default: "active",
+      required: true,
+    },
     tokenVersion: {
       type: Number,
       default: 0,
       select: false,
     },
+    mfaEnabled: { type: Boolean, default: false },
+    mfaSecret: { type: String, select: false },
+    mfaPendingSecret: { type: String, select: false },
+    mfaRecoveryCodeHashes: { type: [String], default: [], select: false },
+    passwordResetTokenHash: { type: String, select: false },
+    passwordResetExpires: { type: Date, select: false },
   },
   { timestamps: true }
 );

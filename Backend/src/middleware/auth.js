@@ -16,7 +16,7 @@ async function authenticateToken(req, res, next) {
     }
 
     const user = await User.findById(payload.sub).select("+tokenVersion");
-    if (!user || user.tokenVersion !== payload.ver) {
+    if (!user || user.tokenVersion !== payload.ver || user.status !== "active") {
       return res.status(401).json({ message: "Your session has expired. Sign in again." });
     }
 

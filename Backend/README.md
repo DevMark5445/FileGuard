@@ -1,17 +1,45 @@
 # FileGuard authentication API
 
-The API stores users in MongoDB, hashes passwords with bcrypt, and uses one-day
-JWT bearer tokens. Public registration always creates a `user`; only a signed-in
-`superadmin` can create an `admin`.
+The API stores users and file fingerprints/metadata in MongoDB, hashes
+passwords with bcrypt, and uses short-lived JWT bearer tokens. File contents
+are hashed in the browser and are never uploaded. Public registration always
+creates a `user`; only a signed-in `superadmin` can create an `admin` or assign
+the admin role.
 
 ## Setup
 
 1. Install Node.js and start a MongoDB instance.
-2. From this directory, copy `.env.example` to `.env` and set a unique
-   `JWT_SECRET` (at least 32 characters) and strong super-admin credentials.
+2. From this directory, create a local `.env` file with the following
+   variables. Keep real credentials out of source control.
+   `MONGODB_URI`, `JWT_SECRET` (at least 32 characters), `SUPER_ADMIN_NAME`,
+   `SUPER_ADMIN_EMAIL`, `SUPER_ADMIN_PASSWORD` (at least 8 characters, a
+   letter, and a number), `FRONTEND_ORIGIN`, and `PORT`.
 3. Run `npm install`, then `npm run dev` for development or `npm start`.
 4. Configure the frontend `VITE_API_URL` if the API is not available through
    the Vite `/api` proxy. The development proxy targets `http://localhost:5000`.
+5. To enable account recovery and email security notifications, configure all
+   of `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, and `SMTP_FROM`.
+   Recovery links are random, single-use, hashed in the database, and expire
+   after 30 minutes. Without SMTP, password recovery returns a clear
+   configuration error.
+
+Example local development values (replace the JWT secret and account details):
+
+```env
+PORT=5000
+MONGODB_URI=mongodb://127.0.0.1:27017/fileguard
+JWT_SECRET=replace-with-a-random-secret-at-least-32-characters-long
+FRONTEND_ORIGIN=http://localhost:5173
+SUPER_ADMIN_NAME=FileGuard Super Admin
+SUPER_ADMIN_EMAIL=superadmin@example.com
+SUPER_ADMIN_PASSWORD=replace-with-a-strong-password
+# Optional, but required for password recovery and email security notifications
+SMTP_HOST=
+SMTP_PORT=
+SMTP_USER=
+SMTP_PASSWORD=
+SMTP_FROM=
+```
 
 The super-admin is created on first startup when its configured email is not
 already present. The configured credentials do not overwrite an existing
@@ -29,7 +57,52 @@ All routes are prefixed with `/api/auth`.
 | `GET` | `/me` | Authenticated | Validate the token and return the current user |
 | `POST` | `/logout` | Authenticated | Invalidate all tokens for the current account |
 | `POST` | `/admins` | Super admin | Create an administrator account |
+| `POST` | `/forgot-password` | Public | Email a one-time recovery link |
+| `POST` | `/reset-password` | Public | Reset a password using its recovery link |
+| `POST` | `/mfa/verify` | Challenge token | Complete super-admin authenticator sign-in |
 
 Registration and login return `{ "user": { "id", "name", "email", "role", "created" }, "token": "..." }`.
 Send the token as `Authorization: Bearer <token>` to protected routes. The
 password is never returned by the API.
+
+## Management API
+
+All management routes use `/api/admin` and require `admin` or `superadmin`
+unless noted. Admins have read-only access to system-wide users, files,
+activity, settings, and incidents. Only the super admin can alter accounts,
+roles, settings, or incidents.
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/overview` | System totals and recent activity |
+| `GET` | `/users`, `/users/:id` | Search/list accounts and inspect account details |
+| `PATCH` | `/users/:id/status` | Activate, deactivate, or suspend (super admin) |
+| `PATCH` | `/users/:id/role` | Promote to admin or revoke admin role (super admin) |
+| `POST` | `/users/:id/reset-access` | Email recovery link to an administrator (super admin) |
+| `DELETE` | `/users/:id` | Delete a non-super-admin and associated file metadata |
+| `GET` | `/files`, `/activity`, `/incidents`, `/settings` | Read system-wide data |
+| `POST` / `PATCH` | `/incidents` and `/incidents/:id` | Record and investigate incidents (super admin) |
+| `PUT` | `/settings` | Update validated policies (super admin) |
+| `GET` | `/reports.csv?from=YYYY-MM-DD&to=YYYY-MM-DD` | Export a period report (super admin) |
+| `GET` / `POST` | `/mfa`, `/mfa/setup`, `/mfa/enable` | Configure super-admin MFA |
+
+Security-sensitive account and policy changes are written to the activity log.
+Super-admin MFA uses an authenticator app; the secret is encrypted at rest with
+a key derived from `JWT_SECRET`. Ten one-time recovery codes are shown once
+during setup. Store them securely. Rotating `JWT_SECRET` requires setting up
+MFA again.
+
+Authenticated file routes use `/api/files`: `GET /` lists the current user's
+files, `GET /policy` returns the active file policy, `POST /` registers a
+fingerprint, `POST /:id/verify` records a verification, `DELETE /:id` removes
+the owner's file metadata, and `GET /history` returns personal verification
+history. All verification hashing occurs in the browser.
+
+## Frontend behavior
+
+The super-admin is redirected to `/superadmin` after sign-in. Existing
+browser-local file fingerprints are imported to that account on first access;
+file contents are not transferred. Legacy verification history remains in
+that browser because it was not server-verifiable. New registrations,
+verifications, authentication events, alerts, and administrative actions are
+recorded centrally.

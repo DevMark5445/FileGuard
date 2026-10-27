@@ -1,6 +1,10 @@
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const User = require("../models/User");
+const SystemSetting = require("../models/SystemSetting");
+const { recordActivity } = require("../utils/audit");
+const { passwordPolicyError } = require("../utils/passwordPolicy");
+const { createMfaChallenge } = require("./authSecurityController");
 
 const emailPattern = /^\S+@\S+\.\S+$/;
 
@@ -10,11 +14,12 @@ function publicUser(user) {
     name: user.name,
     email: user.email,
     role: user.role,
+    status: user.status || "active",
     created: user.createdAt.toISOString(),
   };
 }
 
-function validateCredentials({ name, email, password }, includeName) {
+function validateCredentials({ name, email, password }, includeName, settings) {
   if (includeName && (typeof name !== "string" || !name.trim())) {
     return "Enter your full name.";
   }
@@ -30,29 +35,25 @@ function validateCredentials({ name, email, password }, includeName) {
   if (typeof password !== "string") {
     return "Enter your password.";
   }
-  if (includeName && (password.length < 8 || !/[a-z]/i.test(password) || !/\d/.test(password))) {
-    return "Password needs 8+ characters with a letter and a number.";
-  }
-  if (Buffer.byteLength(password, "utf8") > 72) {
-    return "Password must be 72 characters or fewer.";
-  }
-  return null;
+  return passwordPolicyError(password, settings);
 }
 
-function createToken(user) {
+async function createToken(user) {
+  const settings = await SystemSetting.findOne({ key: "global" });
+  const expiresIn = Math.max(300, (settings?.sessionTimeoutMinutes || 24 * 60) * 60);
   return jwt.sign(
-    { ver: user.tokenVersion },
+    { ver: user.tokenVersion ?? 0 },
     process.env.JWT_SECRET,
-    { subject: user.id, expiresIn: "1d" }
+    { subject: user.id, expiresIn }
   );
 }
 
 async function register(req, res, next) {
   const { name, email, password } = req.body || {};
-  const validationError = validateCredentials({ name, email, password }, true);
-  if (validationError) return res.status(400).json({ message: validationError });
-
   try {
+    const settings = await SystemSetting.findOne({ key: "global" });
+    const validationError = validateCredentials({ name, email, password }, true, settings);
+    if (validationError) return res.status(400).json({ message: validationError });
     const normalizedEmail = email.trim().toLowerCase();
     if (await User.exists({ email: normalizedEmail })) {
       return res.status(409).json({ message: "An account with this email already exists. Sign in instead." });
@@ -64,7 +65,14 @@ async function register(req, res, next) {
       passwordHash: await bcrypt.hash(password, 12),
       role: "user",
     });
-    const token = createToken(user);
+    await recordActivity(req, {
+      event: "auth.registered",
+      actorId: user.id,
+      actorEmail: user.email,
+      targetUserId: user.id,
+      details: { role: user.role },
+    });
+    const token = await createToken(user);
     return res.status(201).json({ user: publicUser(user), token });
   } catch (error) {
     if (error.code === 11000) {
@@ -77,15 +85,57 @@ async function register(req, res, next) {
 async function login(req, res, next) {
   const { email, password } = req.body || {};
   const validationError = validateCredentials({ email, password }, false);
-  if (validationError) return res.status(400).json({ message: validationError });
-
   try {
-    const user = await User.findOne({ email: email.trim().toLowerCase() }).select("+passwordHash +tokenVersion");
-    if (!user || !(await bcrypt.compare(password, user.passwordHash))) {
-      return res.status(401).json({ message: "Email or password is incorrect." });
+    if (validationError) {
+      await recordActivity(req, {
+        event: "auth.login.failed",
+        severity: "warning",
+        actorEmail: typeof email === "string" ? email.trim().toLowerCase() : "",
+        details: { reason: "invalid_request" },
+      });
+      return res.status(400).json({ message: validationError });
     }
 
-    return res.json({ user: publicUser(user), token: createToken(user) });
+    const user = await User.findOne({ email: email.trim().toLowerCase() })
+      .select("+passwordHash +tokenVersion +mfaSecret");
+    if (!user || !(await bcrypt.compare(password, user.passwordHash))) {
+      await recordActivity(req, {
+        event: "auth.login.failed",
+        severity: "warning",
+        actorEmail: typeof email === "string" ? email.trim().toLowerCase() : "",
+        targetUserId: user?.id || null,
+        details: { reason: "invalid_credentials" },
+      });
+      return res.status(401).json({ message: "Email or password is incorrect." });
+    }
+    if (user.status !== "active") {
+      await recordActivity(req, {
+        event: "auth.login.failed",
+        severity: "high",
+        actorId: user.id,
+        actorEmail: user.email,
+        targetUserId: user.id,
+        details: { reason: user.status },
+      });
+      return res.status(403).json({ message: "This account is not active. Contact a FileGuard administrator." });
+    }
+    if (user.role === "superadmin" && user.mfaEnabled) {
+      await recordActivity(req, {
+        event: "auth.login.mfa_challenge",
+        actorId: user.id,
+        actorEmail: user.email,
+        targetUserId: user.id,
+      });
+      return res.json({ mfaRequired: true, challengeToken: createMfaChallenge(user) });
+    }
+
+    await recordActivity(req, {
+      event: "auth.login.succeeded",
+      actorId: user.id,
+      actorEmail: user.email,
+      targetUserId: user.id,
+    });
+    return res.json({ user: publicUser(user), token: await createToken(user) });
   } catch (error) {
     return next(error);
   }
@@ -93,10 +143,10 @@ async function login(req, res, next) {
 
 async function createAdmin(req, res, next) {
   const { name, email, password } = req.body || {};
-  const validationError = validateCredentials({ name, email, password }, true);
-  if (validationError) return res.status(400).json({ message: validationError });
-
   try {
+    const settings = await SystemSetting.findOne({ key: "global" });
+    const validationError = validateCredentials({ name, email, password }, true, settings);
+    if (validationError) return res.status(400).json({ message: validationError });
     const normalizedEmail = email.trim().toLowerCase();
     if (await User.exists({ email: normalizedEmail })) {
       return res.status(409).json({ message: "An account with this email already exists." });
@@ -107,6 +157,12 @@ async function createAdmin(req, res, next) {
       email: normalizedEmail,
       passwordHash: await bcrypt.hash(password, 12),
       role: "admin",
+    });
+    await recordActivity(req, {
+      event: "admin.created",
+      severity: "warning",
+      targetUserId: user.id,
+      details: { email: user.email },
     });
     return res.status(201).json({ user: publicUser(user) });
   } catch (error) {
@@ -124,6 +180,7 @@ async function getCurrentUser(req, res) {
 async function logout(req, res, next) {
   try {
     await User.updateOne({ _id: req.user.id }, { $inc: { tokenVersion: 1 } });
+    await recordActivity(req, { event: "auth.logout", targetUserId: req.user.id });
     return res.json({ message: "Signed out successfully." });
   } catch (error) {
     return next(error);

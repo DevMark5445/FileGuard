@@ -4,6 +4,7 @@ const mongoose = require("mongoose");
 const bcrypt = require("bcryptjs");
 const app = require("./app");
 const User = require("./models/User");
+const ActivityLog = require("./models/ActivityLog");
 
 function validateEnvironment() {
   const required = ["MONGODB_URI", "JWT_SECRET", "SUPER_ADMIN_NAME", "SUPER_ADMIN_EMAIL", "SUPER_ADMIN_PASSWORD"];
@@ -25,6 +26,17 @@ function validateEnvironment() {
   if (!/^\S+@\S+\.\S+$/.test(process.env.SUPER_ADMIN_EMAIL.trim())) {
     throw new Error("SUPER_ADMIN_EMAIL must be a valid email address.");
   }
+  const mailSettings = ["SMTP_HOST", "SMTP_PORT", "SMTP_USER", "SMTP_PASSWORD", "SMTP_FROM"];
+  const configuredMailSettings = mailSettings.filter((key) => process.env[key]);
+  if (configuredMailSettings.length && configuredMailSettings.length !== mailSettings.length) {
+    throw new Error(`Configure all SMTP settings or none: ${mailSettings.join(", ")}`);
+  }
+  if (configuredMailSettings.length) {
+    const port = Number(process.env.SMTP_PORT);
+    if (!Number.isInteger(port) || port < 1 || port > 65535) {
+      throw new Error("SMTP_PORT must be a valid TCP port.");
+    }
+  }
 }
 
 async function ensureSuperAdmin() {
@@ -37,11 +49,19 @@ async function ensureSuperAdmin() {
     return;
   }
 
-  await User.create({
+  const user = await User.create({
     name: process.env.SUPER_ADMIN_NAME.trim(),
     email,
     passwordHash: await bcrypt.hash(process.env.SUPER_ADMIN_PASSWORD, 12),
     role: "superadmin",
+  });
+  await ActivityLog.create({
+    event: "admin.superadmin.bootstrapped",
+    severity: "high",
+    actorId: user.id,
+    actorEmail: user.email,
+    targetUserId: user.id,
+    details: { source: "environment" },
   });
   console.log(`Bootstrapped super admin account: ${email}`);
 }
@@ -49,6 +69,7 @@ async function ensureSuperAdmin() {
 async function start() {
   validateEnvironment();
   await mongoose.connect(process.env.MONGODB_URI);
+  await User.updateMany({ status: { $exists: false } }, { $set: { status: "active" } });
   await ensureSuperAdmin();
 
   const port = Number(process.env.PORT) || 5000;

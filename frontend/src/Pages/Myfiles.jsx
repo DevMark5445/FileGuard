@@ -3,10 +3,11 @@ import { api } from "../api";
 import { Empty, ErrorText, FormError, PageHead, Panel, SmallBtn, Spinner, Table, Td } from "../components/UI";
 import { useToast } from "../context/ToastContext";
 import useLoad from "../hooks/useLoad";
-import { MAX_SIZE, errMsg, fmtDate, fmtSize } from "../utils";
+import { errMsg, fmtDate, fmtSize } from "../utils";
 
 export default function MyFiles() {
   const { data: files, loading, error, reload } = useLoad(api.getFiles, []);
+  const { data: policy } = useLoad(api.getFilePolicy, { maximumFileSize: 50 * 1024 * 1024 });
   const toast = useToast();
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
@@ -18,7 +19,7 @@ export default function MyFiles() {
     let n = 0; const errs = [];
     for (const f of list) {
       if (f.size === 0) { errs.push(`${f.name} is empty.`); continue; }
-      if (f.size > MAX_SIZE) { errs.push(`${f.name} is over 50 MB.`); continue; }
+      if (f.size > policy.maximumFileSize) { errs.push(`${f.name} is over the ${fmtSize(policy.maximumFileSize)} system limit.`); continue; }
       try { await api.addFile(f); n++; } catch (x) { errs.push(errMsg(x)); }
     }
     setBusy(false); setErr(errs.join(" "));

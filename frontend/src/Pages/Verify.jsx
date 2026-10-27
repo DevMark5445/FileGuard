@@ -3,10 +3,11 @@ import { Link, useOutletContext } from "react-router-dom";
 import { api } from "../api";
 import { Button, Empty, ErrorText, FormError, PageHead, Panel, Spinner } from "../components/UI";
 import useLoad from "../hooks/useLoad";
-import { MAX_SIZE, errMsg } from "../utils";
+import { errMsg, fmtSize } from "../utils";
 
 export default function Verify() {
   const { data: files, loading, error } = useLoad(api.getFiles, []);
+  const { data: policy } = useLoad(api.getFilePolicy, { maximumFileSize: 50 * 1024 * 1024 });
   const { refreshAlerts } = useOutletContext();
   const [id, setId] = useState("");
   const [file, setFile] = useState(null);
@@ -17,7 +18,7 @@ export default function Verify() {
   const run = async () => {
     setErr(""); setRes(null);
     if (!file) return setErr("Select the current copy of the file to check.");
-    if (file.size > MAX_SIZE) return setErr("File is over 50 MB.");
+    if (file.size > policy.maximumFileSize) return setErr(`File exceeds the ${fmtSize(policy.maximumFileSize)} system limit.`);
     setBusy(true);
     try { setRes(await api.verify(id || files[0].id, file)); await refreshAlerts(); }
     catch (x) { setErr(errMsg(x)); }

@@ -14,6 +14,8 @@ export default function Auth({ mode, onSuccess }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
+  const [mfaCode, setMfaCode] = useState("");
+  const [challengeToken, setChallengeToken] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -32,7 +34,20 @@ export default function Auth({ mode, onSuccess }) {
 
     setBusy(true);
     try {
-      const user = await authenticate({ mode, name, email, password });
+      const result = await authenticate({
+        mode,
+        name,
+        email,
+        password,
+        challengeToken,
+        code: mfaCode,
+      });
+      if (result?.mfaRequired) {
+        setChallengeToken(result.challengeToken);
+        setPassword("");
+        return;
+      }
+      const user = result;
       onSuccess(user);
       navigate("/", { replace: true });
     } catch (reason) {
@@ -63,18 +78,25 @@ export default function Auth({ mode, onSuccess }) {
       </section>
       <section className="auth-main">
         <div className="auth-card">
-          <h2>{isRegister ? "Create your account" : "Sign in"}</h2>
-          <div className="tabs" role="tablist" aria-label="Account access">
+          <h2>{challengeToken ? "Two-step verification" : isRegister ? "Create your account" : "Sign in"}</h2>
+          {!challengeToken && <div className="tabs" role="tablist" aria-label="Account access">
             <Link to="/login" role="tab" aria-selected={!isRegister} className={!isRegister ? "on" : ""}>Sign in</Link>
             <Link to="/register" role="tab" aria-selected={isRegister} className={isRegister ? "on" : ""}>Register</Link>
-          </div>
+          </div>}
           <form onSubmit={submit}>
-            {isRegister && (
+            {challengeToken ? (
+              <>
+                <p className="hint">Enter the current code from your authenticator app. This sign-in challenge expires in five minutes.</p>
+                <label htmlFor="auth-mfa">Authenticator code</label>
+                <input id="auth-mfa" inputMode="numeric" autoComplete="one-time-code" value={mfaCode} onChange={(event) => setMfaCode(event.target.value)} />
+              </>
+            ) : isRegister && (
               <>
                 <label htmlFor="auth-name">Full name</label>
                 <input id="auth-name" autoComplete="name" value={name} onChange={(event) => setName(event.target.value)} />
               </>
             )}
+            {!challengeToken && <>
             <label htmlFor="auth-email">Email</label>
             <input id="auth-email" type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} />
             <label htmlFor="auth-password">Password</label>
@@ -83,15 +105,19 @@ export default function Auth({ mode, onSuccess }) {
               <>
                 <label htmlFor="auth-confirm">Confirm password</label>
                 <input id="auth-confirm" type="password" autoComplete="new-password" value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} />
-                <p className="hint">At least 8 characters, with a letter and a number.</p>
+                <p className="hint">Use the current password requirements configured by your administrator.</p>
               </>
             )}
+            </>}
             <p className="auth-error" role="alert">{error}</p>
             <button className="btn auth-submit" type="submit" disabled={busy}>
-              {busy ? "Please wait…" : isRegister ? "Create account" : "Sign in"}
+              {busy ? "Please wait…" : challengeToken ? "Verify and sign in" : isRegister ? "Create account" : "Sign in"}
             </button>
           </form>
-          {!isRegister && (
+          {!challengeToken && !isRegister && (
+            <p className="hint"><Link to="/forgot-password">Forgot your password?</Link></p>
+          )}
+          {!challengeToken && !isRegister && (
             <p className="hint">Admin access is provisioned by your FileGuard super admin.</p>
           )}
         </div>

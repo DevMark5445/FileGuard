@@ -1,19 +1,23 @@
+const API_BASE_URL = import.meta.env.VITE_API_URL || "/api";
 const FILES_KEY = "fileguard.files";
 const HISTORY_KEY = "fileguard.history";
 
-function readList(key) {
-  const value = window.localStorage.getItem(key);
-  if (value === null) return [];
+async function request(path, options = {}) {
+  const token = window.localStorage.getItem("fg_token");
+  const response = await fetch(`${API_BASE_URL}${path}`, {
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...options.headers,
+    },
+  });
+  const body = await response.json();
 
-  const parsed = JSON.parse(value);
-  if (!Array.isArray(parsed)) {
-    throw new Error("Saved FileGuard data is invalid. Clear this site's storage and try again.");
+  if (!response.ok) {
+    throw new Error(body.message || "The FileGuard request failed.");
   }
-  return parsed;
-}
-
-function writeList(key, value) {
-  window.localStorage.setItem(key, JSON.stringify(value));
+  return body;
 }
 
 async function hashFile(file) {
@@ -28,58 +32,117 @@ async function hashFile(file) {
     .join("");
 }
 
+function assertAuthenticated() {
+  if (!window.localStorage.getItem("fg_token")) {
+    throw new Error("Sign in to use FileGuard.");
+  }
+}
+
+function readLegacyList(key) {
+  const saved = window.localStorage.getItem(key);
+  if (saved === null) return [];
+  const list = JSON.parse(saved);
+  if (!Array.isArray(list)) {
+    throw new Error("Saved FileGuard data is invalid. Clear this site's storage and try again.");
+  }
+  return list;
+}
+
 export const api = {
+  async getFilePolicy() {
+    assertAuthenticated();
+    return request("/files/policy");
+  },
+
   async getFiles() {
-    return readList(FILES_KEY);
+    assertAuthenticated();
+    let { files } = await request("/files");
+    const legacyFiles = readLegacyList(FILES_KEY);
+    if (legacyFiles.length) {
+      for (let index = 0; index < legacyFiles.length; index += 100) {
+        await request("/files/import", {
+          method: "POST",
+          body: JSON.stringify({ files: legacyFiles.slice(index, index + 100) }),
+        });
+      }
+      window.localStorage.removeItem(FILES_KEY);
+      ({ files } = await request("/files"));
+    }
+    return files;
   },
 
   async getHistory() {
-    return readList(HISTORY_KEY).sort((a, b) => new Date(b.date) - new Date(a.date));
+    assertAuthenticated();
+    const { logs } = await request("/files/history");
+    const legacyLogs = readLegacyList(HISTORY_KEY);
+    return [...logs, ...legacyLogs.filter((legacy) => !logs.some((log) => log.id === legacy.id))]
+      .sort((left, right) => new Date(right.date) - new Date(left.date));
   },
 
   async addFile(file) {
-    const files = readList(FILES_KEY);
+    assertAuthenticated();
     const hash = await hashFile(file);
-    const record = {
-      id: window.crypto.randomUUID(),
-      name: file.name,
-      size: file.size,
-      hash,
-      date: new Date().toISOString(),
-    };
-    writeList(FILES_KEY, [...files, record]);
+    const { file: record } = await request("/files", {
+      method: "POST",
+      body: JSON.stringify({ name: file.name, size: file.size, hash }),
+    });
     return record;
   },
 
   async deleteFile(id) {
-    writeList(FILES_KEY, readList(FILES_KEY).filter((file) => file.id !== id));
+    assertAuthenticated();
+    await request(`/files/${encodeURIComponent(id)}`, { method: "DELETE" });
   },
 
   async verify(id, file) {
-    const registered = readList(FILES_KEY).find((entry) => entry.id === id);
-    if (!registered) throw new Error("That registered file could not be found.");
-
-    const newHash = await hashFile(file);
-    const result = newHash === registered.hash ? "intact" : "modified";
-    const log = {
-      id: window.crypto.randomUUID(),
-      fileName: registered.name,
-      date: new Date().toISOString(),
-      result,
-      reviewed: false,
-      storedHash: registered.hash,
-      newHash,
-    };
-    writeList(HISTORY_KEY, [log, ...readList(HISTORY_KEY)]);
+    assertAuthenticated();
+    const hash = await hashFile(file);
+    const { log } = await request(`/files/${encodeURIComponent(id)}/verify`, {
+      method: "POST",
+      body: JSON.stringify({ hash }),
+    });
     return log;
   },
 
   async reviewLog(id) {
-    const logs = readList(HISTORY_KEY);
-    const log = logs.find((entry) => entry.id === id);
-    if (!log) throw new Error("That verification record could not be found.");
-    writeList(HISTORY_KEY, logs.map((entry) => (
-      entry.id === id ? { ...entry, reviewed: true } : entry
-    )));
+    assertAuthenticated();
+    const legacyLogs = readLegacyList(HISTORY_KEY);
+    if (legacyLogs.some((log) => log.id === id)) {
+      window.localStorage.setItem(HISTORY_KEY, JSON.stringify(legacyLogs.map((log) => (
+        log.id === id ? { ...log, reviewed: true } : log
+      ))));
+      return;
+    }
+    await request(`/files/history/${encodeURIComponent(id)}/review`, { method: "PATCH" });
+  },
+};
+
+export const adminApi = {
+  async get(path) {
+    return request(`/admin${path}`);
+  },
+
+  async mutate(path, method, data) {
+    return request(`/admin${path}`, {
+      method,
+      ...(data === undefined ? {} : { body: JSON.stringify(data) }),
+    });
+  },
+
+  async createAdmin(data) {
+    return request("/auth/admins", { method: "POST", body: JSON.stringify(data) });
+  },
+
+  async downloadReport(filters = {}) {
+    const token = window.localStorage.getItem("fg_token");
+    const query = new URLSearchParams(filters).toString();
+    const response = await fetch(`${API_BASE_URL}/admin/reports.csv${query ? `?${query}` : ""}`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    if (!response.ok) {
+      const body = await response.json();
+      throw new Error(body.message || "Could not download report.");
+    }
+    return response.blob();
   },
 };

@@ -1,5 +1,3 @@
-export const MAX_SIZE = 50 * 1024 * 1024;
-
 export function errMsg(error) {
   return error instanceof Error ? error.message : "Something went wrong.";
 }

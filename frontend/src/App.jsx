@@ -15,6 +15,8 @@ import Dashboard from "./Pages/DashBoard.jsx";
 import History from "./Pages/History.jsx";
 import MyFiles from "./Pages/Myfiles.jsx";
 import Verify from "./Pages/Verify.jsx";
+import SuperAdmin from "./Pages/SuperAdmin.jsx";
+import Recover from "./Pages/Recover.jsx";
 
 function AppLayout({ user, onSignOut }) {
   const [alertCount, setAlertCount] = useState(0);
@@ -67,14 +69,17 @@ function AppRoutes({ user, onAuthenticate, onSignOut }) {
         path="/register"
         element={user ? <Navigate to="/" replace /> : <Auth mode="register" onSuccess={onAuthenticate} />}
       />
+      <Route path="/forgot-password" element={user ? <Navigate to="/" replace /> : <Recover mode="forgot" />} />
+      <Route path="/reset-password" element={user ? <Navigate to="/" replace /> : <Recover mode="reset" />} />
       <Route
         element={user ? <AppLayout user={user} onSignOut={onSignOut} /> : <Navigate to="/login" replace />}
       >
-        <Route index element={<Dashboard />} />
+        <Route index element={user?.role === "superadmin" ? <Navigate to="/superadmin" replace /> : <Dashboard />} />
         <Route path="files" element={<MyFiles />} />
         <Route path="verify" element={<Verify />} />
         <Route path="history" element={<History />} />
-        <Route path="admin" element={user?.role === "admin" || user?.role === "superadmin" ? <Admin /> : <Navigate to="/" replace />} />
+        <Route path="admin" element={user?.role === "admin" ? <Admin /> : user?.role === "superadmin" ? <Navigate to="/superadmin" replace /> : <Navigate to="/" replace />} />
+        <Route path="superadmin" element={user?.role === "superadmin" ? <SuperAdmin /> : <Navigate to="/" replace />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>
     </Routes>

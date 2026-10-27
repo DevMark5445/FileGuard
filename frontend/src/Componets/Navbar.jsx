@@ -6,7 +6,7 @@ export default function Navbar({ alertCount = 0, user, onSignOut }) {
     { to: "/files", label: "My files" },
     { to: "/verify", label: "Verify a file" },
     { to: "/history", label: "History & alerts", badge: alertCount },
-    ...(user?.role === "admin" ? [{ to: "/admin", label: "Admin" }] : []),
+    ...(user?.role === "admin" || user?.role === "superadmin" ? [{ to: "/admin", label: "Admin" }] : []),
   ];
 
   return (
@@ -29,7 +29,7 @@ export default function Navbar({ alertCount = 0, user, onSignOut }) {
 
       <div className="nav-user">
         <strong>{user?.name}</strong>
-        <small>{user?.email}<br />{user?.role === "admin" ? "Administrator" : "User"}</small>
+        <small>{user?.email}<br />{user?.role === "superadmin" ? "Super admin" : user?.role === "admin" ? "Administrator" : "User"}</small>
         <button type="button" className="nav-logout" onClick={onSignOut}>
           Sign out
         </button>

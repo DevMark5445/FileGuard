@@ -9,7 +9,7 @@ import {
 import Navbar from "./Componets/Navbar.jsx";
 import { api } from "./api.js";
 import { initializeAuth, signOut } from "./auth.js";
-import { ToastProvider } from "./context/ToastContext.jsx";
+import { ToastProvider, useToast } from "./context/ToastContext.jsx";
 import Auth from "./Pages/Auth.jsx";
 import Dashboard from "./Pages/DashBoard.jsx";
 import History from "./Pages/History.jsx";
@@ -74,14 +74,15 @@ function AppRoutes({ user, onAuthenticate, onSignOut }) {
         <Route path="files" element={<MyFiles />} />
         <Route path="verify" element={<Verify />} />
         <Route path="history" element={<History />} />
-        <Route path="admin" element={user?.role === "admin" ? <Admin /> : <Navigate to="/" replace />} />
+        <Route path="admin" element={user?.role === "admin" || user?.role === "superadmin" ? <Admin /> : <Navigate to="/" replace />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>
     </Routes>
   );
 }
 
-export default function App() {
+function AppContent() {
+  const toast = useToast();
   const [user, setUser] = useState(null);
   const [authReady, setAuthReady] = useState(false);
   const [authError, setAuthError] = useState("");
@@ -98,22 +99,33 @@ export default function App() {
       });
   }, []);
 
-  const handleSignOut = () => {
-    signOut();
-    setUser(null);
+  const handleSignOut = async () => {
+    try {
+      await signOut();
+    } catch (error) {
+      toast(error instanceof Error ? error.message : "Could not revoke the server session.");
+    } finally {
+      setUser(null);
+    }
   };
 
   return (
     <BrowserRouter>
-      <ToastProvider>
-        {!authReady ? (
-          <p className="startup-loading" role="status">Loading FileGuard…</p>
-        ) : authError ? (
-          <p className="startup-error" role="alert">{authError}</p>
-        ) : (
-          <AppRoutes user={user} onAuthenticate={setUser} onSignOut={handleSignOut} />
-        )}
-      </ToastProvider>
+      {!authReady ? (
+        <p className="startup-loading" role="status">Loading FileGuard…</p>
+      ) : authError ? (
+        <p className="startup-error" role="alert">{authError}</p>
+      ) : (
+        <AppRoutes user={user} onAuthenticate={setUser} onSignOut={handleSignOut} />
+      )}
     </BrowserRouter>
+  );
+}
+
+export default function App() {
+  return (
+    <ToastProvider>
+      <AppContent />
+    </ToastProvider>
   );
 }

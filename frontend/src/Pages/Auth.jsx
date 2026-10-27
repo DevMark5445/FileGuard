@@ -92,7 +92,7 @@ export default function Auth({ mode, onSuccess }) {
             </button>
           </form>
           {!isRegister && (
-            <p className="hint">Demo admin: admin@fileguard.local / Admin@123</p>
+            <p className="hint">Admin access is provisioned by your FileGuard super admin.</p>
           )}
         </div>
       </section>

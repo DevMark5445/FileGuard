@@ -7,7 +7,7 @@ import {
   Routes,
 } from "react-router-dom";
 import Navbar from "./Componets/Navbar.jsx";
-import { api } from "./api.js";
+import { adminApi, api } from "./api.js";
 import { initializeAuth, signOut } from "./auth.js";
 import { ToastProvider, useToast } from "./context/ToastContext.jsx";
 import Auth from "./Pages/Auth.jsx";
@@ -18,16 +18,23 @@ import Verify from "./Pages/Verify.jsx";
 import SuperAdmin from "./Pages/SuperAdmin.jsx";
 import Recover from "./Pages/Recover.jsx";
 import { AppSkeleton } from "./components/Skeleton.jsx";
+import AdminDashboard from "./Pages/AdminDashboard.jsx";
 
 function AppLayout({ user, onSignOut }) {
   const [alertCount, setAlertCount] = useState(0);
   const [alertError, setAlertError] = useState("");
 
   const refreshAlerts = useCallback(async () => {
+    if (user?.role === "admin") {
+      const { total } = await adminApi.get("/alerts?limit=1&status=open");
+      setAlertCount(total);
+      setAlertError("");
+      return;
+    }
     const logs = await api.getHistory();
     setAlertCount(logs.filter((log) => log.result === "modified" && !log.reviewed).length);
     setAlertError("");
-  }, []);
+  }, [user?.role]);
 
   useEffect(() => {
     refreshAlerts().catch((error) => {
@@ -43,19 +50,6 @@ function AppLayout({ user, onSignOut }) {
         <Outlet context={{ refreshAlerts }} />
       </main>
     </div>
-  );
-}
-
-function Admin() {
-  return (
-    <>
-      <h2 className="pt">Administration</h2>
-      <p className="sub">Users, files and verification activity.</p>
-      <section className="panel">
-        <h3>Administration tools</h3>
-        <p className="text-mute">Administration tools will be available here.</p>
-      </section>
-    </>
   );
 }
 
@@ -75,11 +69,11 @@ function AppRoutes({ user, onAuthenticate, onSignOut }) {
       <Route
         element={user ? <AppLayout user={user} onSignOut={onSignOut} /> : <Navigate to="/login" replace />}
       >
-        <Route index element={user?.role === "superadmin" ? <Navigate to="/superadmin" replace /> : <Dashboard />} />
+        <Route index element={user?.role === "superadmin" ? <Navigate to="/superadmin" replace /> : user?.role === "admin" ? <Navigate to="/admin" replace /> : <Dashboard />} />
         <Route path="files" element={<MyFiles />} />
         <Route path="verify" element={<Verify />} />
         <Route path="history" element={<History />} />
-        <Route path="admin" element={user?.role === "admin" ? <Admin /> : user?.role === "superadmin" ? <Navigate to="/superadmin" replace /> : <Navigate to="/" replace />} />
+        <Route path="admin" element={user?.role === "admin" ? <AdminDashboard user={user} onUserUpdated={onAuthenticate} /> : user?.role === "superadmin" ? <Navigate to="/superadmin" replace /> : <Navigate to="/" replace />} />
         <Route path="superadmin" element={user?.role === "superadmin" ? <SuperAdmin /> : <Navigate to="/" replace />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>

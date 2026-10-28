@@ -69,6 +69,24 @@ export async function resetPassword(token, password) {
   });
 }
 
+export const profileApi = {
+  async updateProfile(data) {
+    const token = window.localStorage.getItem(TOKEN_KEY);
+    return request("/auth/me", { method: "PATCH", token, body: JSON.stringify(data) });
+  },
+
+  async changePassword(data) {
+    const token = window.localStorage.getItem(TOKEN_KEY);
+    const response = await request("/auth/me/password", {
+      method: "PATCH",
+      token,
+      body: JSON.stringify(data),
+    });
+    window.localStorage.setItem(TOKEN_KEY, response.token);
+    return response;
+  },
+};
+
 export async function signOut() {
   const token = window.localStorage.getItem(TOKEN_KEY);
   window.localStorage.removeItem(TOKEN_KEY);

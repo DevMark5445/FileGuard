@@ -497,7 +497,11 @@ export default function SuperAdmin() {
     }
     const path = `/users/${encodeURIComponent(user.id)}`;
     if (action === "role") return perform(() => adminApi.mutate(`${path}/role`, "PATCH", data), "Account role updated.");
-    if (action === "status") return perform(() => adminApi.mutate(`${path}/status`, "PATCH", data), `Account ${data.status}.`);
+    if (action === "status") {
+      const reason = window.prompt(`Why are you changing ${user.name}'s account status?`);
+      if (!reason?.trim()) return Promise.resolve();
+      return perform(() => adminApi.mutate(`${path}/status`, "PATCH", { ...data, reason }), `Account ${data.status}.`);
+    }
     return perform(() => adminApi.mutate(path, "DELETE"), "Account deleted.");
   };
 

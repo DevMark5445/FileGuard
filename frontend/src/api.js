@@ -129,8 +129,27 @@ export const adminApi = {
     });
   },
 
+  async archiveActivity(before) {
+    return request("/admin/activity/archive", {
+      method: "POST",
+      body: JSON.stringify({ before }),
+    });
+  },
+
+  async restoreActivity(id) {
+    return request(`/admin/activity/${encodeURIComponent(id)}/restore`, { method: "POST" });
+  },
+
   async createAdmin(data) {
     return request("/auth/admins", { method: "POST", body: JSON.stringify(data) });
+  },
+
+  async verifyFile(fileId, file, reason) {
+    const hash = await hashFile(file);
+    return request(`/files/${encodeURIComponent(fileId)}/admin-verify`, {
+      method: "POST",
+      body: JSON.stringify({ hash, reason }),
+    });
   },
 
   async downloadReport(filters = {}) {

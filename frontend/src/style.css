@@ -309,6 +309,13 @@ label {
 .admin-recovery-codes { white-space: pre-line; line-height: 1.8; }
 .report-period { display: flex; flex-wrap: wrap; align-items: end; gap: 0.8rem; }
 .report-period label { min-width: 180px; }
+.activity-archive-controls { display: flex; flex-wrap: wrap; align-items: end; justify-content: space-between; gap: 0.8rem; margin-bottom: 0.8rem; }
+.activity-archive-form { display: flex; flex-wrap: wrap; align-items: end; gap: 0.6rem; }
+.activity-archive-form label { min-width: 190px; margin: 0; }
+.activity-archive-form .btn { margin: 0; }
+.admin-file-verify { max-width: 650px; padding: 0.8rem; border-radius: 6px; background: var(--bg); }
+.admin-file-verify > p:first-child { margin-top: 0; }
+.admin-file-verify .btn { margin-top: 0.7rem; }
 
 .auth {
   display: grid;

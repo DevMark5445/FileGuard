@@ -11,6 +11,8 @@ const activityLogSchema = new mongoose.Schema(
     details: { type: mongoose.Schema.Types.Mixed, default: {} },
     ip: { type: String, maxlength: 100, default: "" },
     userAgent: { type: String, maxlength: 500, default: "" },
+    archivedAt: { type: Date, default: null, index: true },
+    archivedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
   },
   { timestamps: true }
 );

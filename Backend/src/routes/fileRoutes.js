@@ -6,10 +6,11 @@ const {
   importLegacyFiles,
   deleteFile,
   verifyFile,
+  adminVerifyFile,
   getHistory,
   reviewLog,
 } = require("../controllers/fileController");
-const { authenticateToken } = require("../middleware/auth");
+const { authenticateToken, requireRole } = require("../middleware/auth");
 
 const router = express.Router();
 router.use(authenticateToken);
@@ -19,6 +20,7 @@ router.post("/import", importLegacyFiles);
 router.post("/", registerFile);
 router.delete("/:id", deleteFile);
 router.post("/:id/verify", verifyFile);
+router.post("/:id/admin-verify", requireRole("admin", "superadmin"), adminVerifyFile);
 router.get("/history", getHistory);
 router.patch("/history/:id/review", reviewLog);
 

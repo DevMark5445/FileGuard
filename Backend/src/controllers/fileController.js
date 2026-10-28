@@ -177,10 +177,58 @@ async function verifyFile(req, res, next) {
   }
 }
 
+async function adminVerifyFile(req, res, next) {
+  const { hash, reason } = req.body || {};
+  if (typeof hash !== "string" || !/^[a-f\d]{64}$/i.test(hash)) {
+    return res.status(400).json({ message: "A valid SHA-256 file fingerprint is required." });
+  }
+  if (typeof reason !== "string" || !reason.trim() || reason.trim().length > 500) {
+    return res.status(400).json({ message: "A verification reason of 1–500 characters is required." });
+  }
+
+  try {
+    const file = await FileRecord.findById(req.params.id).populate("owner", "name email");
+    if (!file) return res.status(404).json({ message: "That registered file could not be found." });
+
+    const result = hash.toLowerCase() === file.hash ? "intact" : "modified";
+    file.latestStatus = result;
+    file.verificationCount += 1;
+    await file.save();
+    const activity = await recordActivity(req, {
+      event: result === "modified" ? "file.modified" : "file.verified",
+      severity: result === "modified" ? "warning" : "info",
+      targetFileId: file.id,
+      targetUserId: file.owner.id,
+      details: {
+        fileName: file.name,
+        result,
+        storedHash: file.hash,
+        newHash: hash.toLowerCase(),
+        performedByRole: req.user.role,
+        authorizedReason: reason.trim(),
+      },
+    });
+    return res.json({
+      log: {
+        id: activity.id,
+        fileName: file.name,
+        date: activity.createdAt.toISOString(),
+        result,
+        storedHash: file.hash,
+        newHash: hash.toLowerCase(),
+        owner: { name: file.owner.name, email: file.owner.email },
+      },
+    });
+  } catch (error) {
+    if (error.name === "CastError") return res.status(404).json({ message: "That registered file could not be found." });
+    return next(error);
+  }
+}
+
 async function getHistory(req, res, next) {
   try {
     const logs = await ActivityLog.find({
-      actorId: req.user.id,
+      $or: [{ actorId: req.user.id }, { targetUserId: req.user.id }],
       event: { $in: ["file.modified", "file.verified"] },
     }).sort({ createdAt: -1 }).limit(500);
     return res.json({
@@ -222,4 +270,4 @@ async function reviewLog(req, res, next) {
   }
 }
 
-module.exports = { getFilePolicy, getFiles, registerFile, importLegacyFiles, deleteFile, verifyFile, getHistory, reviewLog, formatFile };
+module.exports = { getFilePolicy, getFiles, registerFile, importLegacyFiles, deleteFile, verifyFile, adminVerifyFile, getHistory, reviewLog, formatFile };

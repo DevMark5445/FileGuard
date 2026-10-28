@@ -2,6 +2,7 @@ const mongoose = require("mongoose");
 const User = require("../models/User");
 const FileRecord = require("../models/FileRecord");
 const ActivityLog = require("../models/ActivityLog");
+const SecurityAlert = require("../models/SecurityAlert");
 const SecurityIncident = require("../models/SecurityIncident");
 const SystemSetting = require("../models/SystemSetting");
 const { formatFile } = require("./fileController");
@@ -25,6 +26,12 @@ function parseLimit(value, fallback = 100) {
 function parseSkip(value) {
   const parsed = Number.parseInt(value, 10);
   return Number.isInteger(parsed) ? Math.min(Math.max(parsed, 0), 1000000) : 0;
+}
+
+function referenceId(value) {
+  if (!value) return null;
+  if (typeof value === "object") return value._id?.toString() || value.id || null;
+  return value.toString();
 }
 
 async function getOverview(req, res, next) {
@@ -54,6 +61,12 @@ async function getOverview(req, res, next) {
 async function listUsers(req, res, next) {
   try {
     const filter = {};
+    if (req.user.role === "admin") {
+      if (req.query.role !== undefined && req.query.role !== "user") {
+        return res.status(403).json({ message: "Administrators can only view standard user accounts." });
+      }
+      filter.role = "user";
+    }
     if (req.query.role !== undefined) {
       if (!["user", "admin", "superadmin"].includes(req.query.role)) {
         return res.status(400).json({ message: "Choose a valid user role filter." });
@@ -93,6 +106,9 @@ async function getUser(req, res, next) {
   try {
     const user = await User.findById(req.params.id);
     if (!user) return res.status(404).json({ message: "User account not found." });
+    if (req.user.role === "admin" && user.role !== "user") {
+      return res.status(404).json({ message: "User account not found." });
+    }
     const [fileCount, activity] = await Promise.all([
       FileRecord.countDocuments({ owner: user.id }),
       ActivityLog.find({ $or: [{ actorId: user.id }, { targetUserId: user.id }] })
@@ -114,16 +130,21 @@ async function updateUserStatus(req, res, next) {
   if (!["active", "deactivated", "suspended"].includes(status)) {
     return res.status(400).json({ message: "Status must be active, deactivated, or suspended." });
   }
-  if (typeof reason !== "string" || reason.length > 500) {
-    return res.status(400).json({ message: "Reason must be 500 characters or fewer." });
+  if (typeof reason !== "string" || !reason.trim() || reason.length > 500) {
+    return res.status(400).json({ message: "A status-change reason of 1–500 characters is required." });
   }
   if (req.params.id === req.user.id) {
     return res.status(400).json({ message: "You cannot change your own account status." });
   }
 
   try {
+    const target = await User.findById(req.params.id);
+    if (!target || target.role === "superadmin" ||
+        (req.user.role === "admin" && target.role !== "user")) {
+      return res.status(404).json({ message: "Manageable user account not found." });
+    }
     const user = await User.findOneAndUpdate(
-      { _id: req.params.id, role: { $ne: "superadmin" } },
+      { _id: req.params.id, role: req.user.role === "admin" ? "user" : { $ne: "superadmin" } },
       { $set: { status }, $inc: { tokenVersion: 1 } },
       { new: true, runValidators: true }
     ).select("+tokenVersion");
@@ -132,7 +153,7 @@ async function updateUserStatus(req, res, next) {
       event: "user.status.updated",
       severity: status === "active" ? "info" : "warning",
       targetUserId: user.id,
-      details: { status, reason },
+      details: { status, reason: reason.trim() },
     });
     return res.json({ user: publicUser(user) });
   } catch (error) {
@@ -179,7 +200,7 @@ async function deleteUser(req, res, next) {
     if (!user) return res.status(404).json({ message: "Manageable user account not found." });
 
     const fileIds = await FileRecord.find({ owner: user.id }).distinct("_id");
-    await     await Promise.all([
+    await Promise.all([
       FileRecord.deleteMany({ owner: user.id }),
       ActivityLog.updateMany(
           { $or: [{ actorId: user.id }, { targetUserId: user.id }, { targetFileId: { $in: fileIds } }] },
@@ -221,17 +242,22 @@ function formatActivity(log) {
     actorId: log.actorId?._id?.toString() || log.actorId?.toString() || null,
     actorName: log.actorId?.name || log.actorEmail || "System",
     actorEmail: log.actorId?.email || log.actorEmail || "",
-    targetUserId: log.targetUserId?.toString() || null,
-    targetFileId: log.targetFileId?.toString() || null,
+    targetUserId: referenceId(log.targetUserId),
+    targetFileId: referenceId(log.targetFileId),
     details: log.details || {},
     ip: log.ip,
     date: log.createdAt.toISOString(),
+    archivedAt: log.archivedAt?.toISOString() || null,
   };
 }
 
 async function listActivity(req, res, next) {
   try {
     const filter = {};
+    if (req.query.archived !== undefined &&
+        !["true", "false"].includes(req.query.archived)) {
+      return res.status(400).json({ message: "Archived must be true or false." });
+    }
     if (req.query.severity !== undefined &&
         !["info", "warning", "high", "alerts"].includes(req.query.severity)) {
       return res.status(400).json({ message: "Choose a valid activity severity filter." });
@@ -245,6 +271,11 @@ async function listActivity(req, res, next) {
     } else if (["info", "warning", "high"].includes(req.query.severity)) {
       filter.severity = req.query.severity;
     }
+    if (req.query.archived === "true") {
+      filter.archivedAt = { $type: "date" };
+    } else if (req.query.archived === "false" || req.query.severity !== "alerts") {
+      filter.archivedAt = null;
+    }
     if (typeof req.query.event === "string" && req.query.event) filter.event = req.query.event;
     const limit = parseLimit(req.query.limit);
     const skip = parseSkip(req.query.skip);
@@ -254,6 +285,188 @@ async function listActivity(req, res, next) {
     ]);
     return res.json({ activity: activity.map(formatActivity), total, limit, skip });
   } catch (error) {
+    return next(error);
+  }
+}
+
+async function archiveActivity(req, res, next) {
+  const { before } = req.body || {};
+  if (Object.keys(req.body || {}).some((key) => key !== "before") ||
+      typeof before !== "string" || !before.trim()) {
+    return res.status(400).json({ message: "Provide a cutoff date to archive older activity." });
+  }
+  const cutoff = new Date(before);
+  if (Number.isNaN(cutoff.getTime()) || cutoff.toISOString() !== before ||
+      cutoff >= new Date()) {
+    return res.status(400).json({ message: "The archive cutoff must be a valid date in the past." });
+  }
+
+  try {
+    const result = await ActivityLog.updateMany(
+      { createdAt: { $lt: cutoff }, archivedAt: null },
+      { $set: { archivedAt: new Date(), archivedBy: req.user.id } }
+    );
+    const archivedCount = result.modifiedCount ?? result.nModified ?? 0;
+    await recordActivity(req, {
+      event: "activity.archived",
+      severity: "warning",
+      details: { archivedCount, cutoff: cutoff.toISOString() },
+    });
+    return res.json({ archivedCount, message: `${archivedCount} activity records archived and remain available in the archive.` });
+  } catch (error) {
+    return next(error);
+  }
+}
+
+async function restoreActivity(req, res, next) {
+  try {
+    const activity = await ActivityLog.findOneAndUpdate(
+      { _id: req.params.id, archivedAt: { $type: "date" } },
+      { $set: { archivedAt: null, archivedBy: null } },
+      { new: true }
+    );
+    if (!activity) return res.status(404).json({ message: "Archived activity record not found." });
+    await recordActivity(req, {
+      event: "activity.restored",
+      severity: "warning",
+      details: { activityId: activity.id, originalEvent: activity.event },
+    });
+    return res.json({ message: "Activity record restored to the active log." });
+  } catch (error) {
+    if (error.name === "CastError") return res.status(404).json({ message: "Archived activity record not found." });
+    return next(error);
+  }
+}
+
+async function listVerificationHistory(req, res, next) {
+  try {
+    const filter = { event: { $in: ["file.verified", "file.modified"] } };
+    const limit = parseLimit(req.query.limit);
+    const skip = parseSkip(req.query.skip);
+    const [logs, total] = await Promise.all([
+      ActivityLog.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit)
+        .populate("actorId", "name email role")
+        .populate({ path: "targetUserId", select: "name email" })
+        .populate({ path: "targetFileId", select: "name owner", populate: { path: "owner", select: "name email" } }),
+      ActivityLog.countDocuments(filter),
+    ]);
+    const alerts = await SecurityAlert.find({
+      sourceActivity: { $in: logs.map((log) => log.id) },
+    }).select("sourceActivity status severity");
+    const alertByActivity = new Map(alerts.map((alert) => [alert.sourceActivity.toString(), alert]));
+
+    return res.json({
+      history: logs.map((log) => {
+        const alert = alertByActivity.get(log.id);
+        return {
+          id: log.id,
+          fileId: log.targetFileId?.id || null,
+          fileName: log.details.fileName || log.targetFileId?.name || "Removed file",
+          owner: log.targetFileId?.owner
+            ? { id: log.targetFileId.owner.id, name: log.targetFileId.owner.name, email: log.targetFileId.owner.email }
+            : log.targetUserId
+              ? { id: log.targetUserId.id, name: log.targetUserId.name, email: log.targetUserId.email }
+              : null,
+          performedBy: log.actorId?.name || log.actorEmail || "Unknown",
+          performedByEmail: log.actorId?.email || log.actorEmail || "",
+          date: log.createdAt.toISOString(),
+          result: log.details.result || (log.event === "file.modified" ? "modified" : "intact"),
+          originalHash: log.details.storedHash || "",
+          checkedHash: log.details.newHash || "",
+          alert: alert ? { id: alert.id, status: alert.status, severity: alert.severity } : null,
+        };
+      }),
+      total,
+      limit,
+      skip,
+    });
+  } catch (error) {
+    return next(error);
+  }
+}
+
+async function listAlerts(req, res, next) {
+  try {
+    const filter = {};
+    if (req.query.status !== undefined) {
+      if (!["open", "investigating", "resolved"].includes(req.query.status)) {
+        return res.status(400).json({ message: "Choose a valid alert status filter." });
+      }
+      filter.status = req.query.status;
+    }
+    if (req.query.severity !== undefined) {
+      if (!["warning", "high"].includes(req.query.severity)) {
+        return res.status(400).json({ message: "Choose a valid alert severity filter." });
+      }
+      filter.severity = req.query.severity;
+    }
+    const limit = parseLimit(req.query.limit);
+    const skip = parseSkip(req.query.skip);
+    const [alerts, total] = await Promise.all([
+      SecurityAlert.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit).populate("notes.author", "name email"),
+      SecurityAlert.countDocuments(filter),
+    ]);
+    const activities = await ActivityLog.find({
+      _id: { $in: alerts.map((alert) => alert.sourceActivity) },
+    })
+      .populate("actorId", "name email role")
+      .populate("targetUserId", "name email role")
+      .populate({ path: "targetFileId", select: "name hash latestStatus owner", populate: { path: "owner", select: "name email" } });
+    const activityById = new Map(activities.map((activity) => [activity.id, activity]));
+
+    return res.json({
+      alerts: alerts.map((alert) => {
+        const activity = activityById.get(alert.sourceActivity.toString());
+        return {
+          id: alert.id,
+          status: alert.status,
+          severity: alert.severity,
+          escalatedAt: alert.escalatedAt?.toISOString() || null,
+          notes: alert.notes,
+          created: alert.createdAt.toISOString(),
+          activity: activity ? formatActivity(activity) : null,
+        };
+      }),
+      total,
+      limit,
+      skip,
+    });
+  } catch (error) {
+    return next(error);
+  }
+}
+
+async function updateAlert(req, res, next) {
+  const { status, note, escalate } = req.body || {};
+  if (!["open", "investigating", "resolved"].includes(status)) {
+    return res.status(400).json({ message: "Alert status must be open, investigating, or resolved." });
+  }
+  if (typeof note !== "string" || !note.trim() || note.length > 2000) {
+    return res.status(400).json({ message: "Add an investigation note of 1–2,000 characters." });
+  }
+  if (escalate !== undefined && typeof escalate !== "boolean") {
+    return res.status(400).json({ message: "Escalation must be a boolean value." });
+  }
+  try {
+    const alert = await SecurityAlert.findById(req.params.id);
+    if (!alert) return res.status(404).json({ message: "Security alert not found." });
+    alert.status = status;
+    alert.resolvedAt = status === "resolved" ? new Date() : null;
+    alert.notes.push({ author: req.user.id, text: note.trim() });
+    if (escalate) alert.escalatedAt = new Date();
+    await alert.save();
+
+    const activity = await ActivityLog.findById(alert.sourceActivity);
+    await recordActivity(req, {
+      event: "security.alert.updated",
+      severity: escalate ? "high" : "warning",
+      targetFileId: activity?.targetFileId || null,
+      targetUserId: activity?.targetUserId || null,
+      details: { alertId: alert.id, status, escalated: Boolean(escalate) },
+    });
+    return res.json({ message: escalate ? "Alert updated and escalated to the super admin." : "Alert investigation updated." });
+  } catch (error) {
+    if (error.name === "CastError") return res.status(404).json({ message: "Security alert not found." });
     return next(error);
   }
 }
@@ -429,14 +642,19 @@ async function exportReport(req, res, next) {
     if (/^\d{4}-\d{2}-\d{2}$/.test(req.query.to || "")) to.setUTCDate(to.getUTCDate() + 1);
     const range = { $gte: from, $lt: to };
     const adminIds = await User.find({ role: { $in: ["admin", "superadmin"] } }).distinct("_id");
-    const [users, files, activity, incidents] = await Promise.all([
-      User.countDocuments({ createdAt: range }),
-      FileRecord.countDocuments({ createdAt: range }),
+    const [users, files, activity, incidents, alerts] = await Promise.all([
+      User.countDocuments(),
+      FileRecord.countDocuments(),
       ActivityLog.aggregate([
         { $match: { event: { $in: ["file.verified", "file.modified"] }, createdAt: range } },
         { $group: { _id: "$event", count: { $sum: 1 } } },
       ]),
       SecurityIncident.countDocuments({ createdAt: range }),
+      SecurityAlert.countDocuments({ createdAt: range }),
+    ]);
+    const [newUsers, newFiles] = await Promise.all([
+      User.countDocuments({ createdAt: range }),
+      FileRecord.countDocuments({ createdAt: range }),
     ]);
     const verificationCounts = Object.fromEntries(activity.map(({ _id, count }) => [_id, count]));
     const adminActivities = await ActivityLog.countDocuments({
@@ -448,11 +666,14 @@ async function exportReport(req, res, next) {
       ["Metric", "Value"],
       ["Report period start", from.toISOString()],
       ["Report period end", to.toISOString()],
-      ["Registered users", users],
-      ["Monitored files", files],
+      ["Registered users (total)", users],
+      ["New registrations in period", newUsers],
+      ["Monitored files (total)", files],
+      ["Files registered in period", newFiles],
       ["Successful verifications", verificationCounts["file.verified"] || 0],
       ["Detected modifications", verificationCounts["file.modified"] || 0],
       ["Security incidents", incidents],
+      ["Security alerts", alerts],
       ["Administrator activities", adminActivities],
       ["Report generated at", now.toISOString()],
     ];
@@ -474,6 +695,11 @@ module.exports = {
   deleteUser,
   listFiles,
   listActivity,
+  archiveActivity,
+  restoreActivity,
+  listVerificationHistory,
+  listAlerts,
+  updateAlert,
   listIncidents,
   createIncident,
   updateIncident,

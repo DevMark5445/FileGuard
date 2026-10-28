@@ -45,3 +45,25 @@ test("requireRole allows the configured role", () => {
   assert.equal(response.statusCode, null);
   assert.equal(nextCalled, true);
 });
+
+test("admin routes can allow admins while protecting super-admin operations", () => {
+  const response = createResponse();
+  let nextCalled = false;
+
+  requireRole("admin", "superadmin")(
+    { user: { role: "admin" } },
+    response,
+    () => { nextCalled = true; }
+  );
+  assert.equal(nextCalled, true);
+
+  const protectedResponse = createResponse();
+  let protectedNextCalled = false;
+  requireRole("superadmin")(
+    { user: { role: "admin" } },
+    protectedResponse,
+    () => { protectedNextCalled = true; }
+  );
+  assert.equal(protectedResponse.statusCode, 403);
+  assert.equal(protectedNextCalled, false);
+});

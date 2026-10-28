@@ -177,6 +177,80 @@ async function getCurrentUser(req, res) {
   return res.json({ user: publicUser(req.user) });
 }
 
+async function updateCurrentUser(req, res, next) {
+  const { name, email } = req.body || {};
+  if (Object.keys(req.body || {}).some((key) => !["name", "email"].includes(key))) {
+    return res.status(400).json({ message: "Only name and email can be updated here." });
+  }
+  if (typeof name !== "string" || !name.trim() || name.trim().length > 100) {
+    return res.status(400).json({ message: "Name is required and must be 100 characters or fewer." });
+  }
+  if (typeof email !== "string" || !emailPattern.test(email.trim()) || email.trim().length > 254) {
+    return res.status(400).json({ message: "Enter a valid email address." });
+  }
+  try {
+    const normalizedEmail = email.trim().toLowerCase();
+    const duplicate = await User.exists({ email: normalizedEmail, _id: { $ne: req.user.id } });
+    if (duplicate) return res.status(409).json({ message: "An account with this email already exists." });
+
+    req.user.name = name.trim();
+    req.user.email = normalizedEmail;
+    await req.user.save();
+    await recordActivity(req, {
+      event: "auth.profile.updated",
+      actorId: req.user.id,
+      actorEmail: normalizedEmail,
+      targetUserId: req.user.id,
+    });
+    return res.json({ user: publicUser(req.user) });
+  } catch (error) {
+    if (error.code === 11000) return res.status(409).json({ message: "An account with this email already exists." });
+    return next(error);
+  }
+}
+
+async function changeCurrentPassword(req, res, next) {
+  const { currentPassword, newPassword } = req.body || {};
+  if (Object.keys(req.body || {}).some((key) => !["currentPassword", "newPassword"].includes(key))) {
+    return res.status(400).json({ message: "Only the current and new password fields are allowed." });
+  }
+  if (typeof currentPassword !== "string" || typeof newPassword !== "string") {
+    return res.status(400).json({ message: "Enter your current and new password." });
+  }
+  try {
+    const user = await User.findById(req.user.id).select("+passwordHash +tokenVersion");
+    if (!user || !(await bcrypt.compare(currentPassword, user.passwordHash))) {
+      await recordActivity(req, {
+        event: "auth.password.change.failed",
+        severity: "warning",
+        targetUserId: req.user.id,
+        details: { reason: "invalid_current_password" },
+      });
+      return res.status(401).json({ message: "Current password is incorrect." });
+    }
+
+    const settings = await SystemSetting.findOne({ key: "global" });
+    const policyError = passwordPolicyError(newPassword, settings);
+    if (policyError) return res.status(400).json({ message: policyError });
+    if (await bcrypt.compare(newPassword, user.passwordHash)) {
+      return res.status(400).json({ message: "Choose a password different from your current password." });
+    }
+
+    user.passwordHash = await bcrypt.hash(newPassword, 12);
+    user.tokenVersion += 1;
+    await user.save();
+    const token = await createToken(user);
+    await recordActivity(req, {
+      event: "auth.password.changed",
+      severity: "warning",
+      targetUserId: user.id,
+    });
+    return res.json({ user: publicUser(user), token });
+  } catch (error) {
+    return next(error);
+  }
+}
+
 async function logout(req, res, next) {
   try {
     await User.updateOne({ _id: req.user.id }, { $inc: { tokenVersion: 1 } });
@@ -187,4 +261,12 @@ async function logout(req, res, next) {
   }
 }
 
-module.exports = { register, login, createAdmin, getCurrentUser, logout };
+module.exports = {
+  register,
+  login,
+  createAdmin,
+  getCurrentUser,
+  updateCurrentUser,
+  changeCurrentPassword,
+  logout,
+};

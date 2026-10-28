@@ -55,6 +55,8 @@ All routes are prefixed with `/api/auth`.
 | `POST` | `/register` | Public | Create a user account and sign in |
 | `POST` | `/login` | Public | Sign in and receive a bearer token |
 | `GET` | `/me` | Authenticated | Validate the token and return the current user |
+| `PATCH` | `/me` | Authenticated | Update the current user's name and email |
+| `PATCH` | `/me/password` | Authenticated | Change the current password and revoke older sessions |
 | `POST` | `/logout` | Authenticated | Invalidate all tokens for the current account |
 | `POST` | `/admins` | Super admin | Create an administrator account |
 | `POST` | `/forgot-password` | Public | Email a one-time recovery link |
@@ -68,25 +70,37 @@ password is never returned by the API.
 ## Management API
 
 All management routes use `/api/admin` and require `admin` or `superadmin`
-unless noted. Admins have read-only access to system-wide users, files,
-activity, settings, and incidents. Only the super admin can alter accounts,
-roles, settings, or incidents.
+unless noted. Admins can view standard users, file metadata, activity,
+verification history, alerts, and reports; they can suspend or reactivate
+standard users and investigate or escalate alerts. Admins cannot create or
+manage administrator accounts, change system settings, or create or update
+incidents. Those privileged changes are restricted to the super admin.
 
 | Method | Path | Purpose |
 | --- | --- | --- |
 | `GET` | `/overview` | System totals and recent activity |
 | `GET` | `/users`, `/users/:id` | Search/list accounts and inspect account details |
-| `PATCH` | `/users/:id/status` | Activate, deactivate, or suspend (super admin) |
+| `PATCH` | `/users/:id/status` | Activate, deactivate, or suspend an eligible account (admin or super admin; reason required) |
 | `PATCH` | `/users/:id/role` | Promote to admin or revoke admin role (super admin) |
 | `POST` | `/users/:id/reset-access` | Email recovery link to an administrator (super admin) |
 | `DELETE` | `/users/:id` | Delete a non-super-admin and associated file metadata |
 | `GET` | `/files`, `/activity`, `/incidents`, `/settings` | Read system-wide data |
+| `POST` | `/activity/archive` | Archive logs older than a supplied ISO cutoff date (admin or super admin; records remain retrievable) |
+| `GET` | `/activity?archived=true` | Retrieve archived activity |
+| `POST` | `/activity/:id/restore` | Restore an archived activity record |
+| `GET` | `/verification-history`, `/alerts` | Review verification records and security alerts |
+| `PATCH` | `/alerts/:id` | Add an investigation note, update alert status, or escalate (admin or super admin) |
 | `POST` / `PATCH` | `/incidents` and `/incidents/:id` | Record and investigate incidents (super admin) |
 | `PUT` | `/settings` | Update validated policies (super admin) |
-| `GET` | `/reports.csv?from=YYYY-MM-DD&to=YYYY-MM-DD` | Export a period report (super admin) |
+| `GET` | `/reports.csv?from=YYYY-MM-DD&to=YYYY-MM-DD` | Export a period report (admin or super admin) |
 | `GET` / `POST` | `/mfa`, `/mfa/setup`, `/mfa/enable` | Configure super-admin MFA |
 
 Security-sensitive account and policy changes are written to the activity log.
+File modifications and failed login/MFA events generate security alerts.
+When SMTP is configured and security notifications are enabled, active admins
+and super admins also receive email notifications. Alerts preserve the source
+activity record while their investigation notes and status are managed
+separately.
 Super-admin MFA uses an authenticator app; the secret is encrypted at rest with
 a key derived from `JWT_SECRET`. Ten one-time recovery codes are shown once
 during setup. Store them securely. Rotating `JWT_SECRET` requires setting up
@@ -96,7 +110,11 @@ Authenticated file routes use `/api/files`: `GET /` lists the current user's
 files, `GET /policy` returns the active file policy, `POST /` registers a
 fingerprint, `POST /:id/verify` records a verification, `DELETE /:id` removes
 the owner's file metadata, and `GET /history` returns personal verification
-history. All verification hashing occurs in the browser.
+history. Admins and super admins can also use
+`POST /:id/admin-verify` to compare an authorized local copy; a reason is
+required, only its SHA-256 hash is sent to the server, and the original
+registered fingerprint is never replaced. All verification hashing occurs in
+the browser.
 
 ## Frontend behavior
 
@@ -105,4 +123,6 @@ browser-local file fingerprints are imported to that account on first access;
 file contents are not transferred. Legacy verification history remains in
 that browser because it was not server-verifiable. New registrations,
 verifications, authentication events, alerts, and administrative actions are
-recorded centrally.
+recorded centrally. Admins are redirected to `/admin`, which provides
+user-management, file monitoring, authorized verification, alert
+investigation, activity, report, notification, and profile sections.

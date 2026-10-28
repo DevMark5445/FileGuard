@@ -5,6 +5,8 @@ const {
   login,
   createAdmin,
   getCurrentUser,
+  updateCurrentUser,
+  changeCurrentPassword,
   logout,
 } = require("../controllers/authController");
 const { authenticateToken, requireRole } = require("../middleware/auth");
@@ -37,6 +39,8 @@ router.post("/reset-password", recoveryLimiter, resetPassword);
 router.post("/mfa/verify", loginLimiter, verifyMfa);
 router.post("/admins", authenticateToken, requireRole("superadmin"), createAdmin);
 router.get("/me", authenticateToken, getCurrentUser);
+router.patch("/me", authenticateToken, updateCurrentUser);
+router.patch("/me/password", authenticateToken, changeCurrentPassword);
 router.post("/logout", authenticateToken, logout);
 
 module.exports = router;

@@ -1,0 +1,13 @@
+{
+  "rewrites": [
+    { "source": "/login", "destination": "/index.html" },
+    { "source": "/register", "destination": "/index.html" },
+    { "source": "/forgot-password", "destination": "/index.html" },
+    { "source": "/reset-password", "destination": "/index.html" },
+    { "source": "/files", "destination": "/index.html" },
+    { "source": "/verify", "destination": "/index.html" },
+    { "source": "/history", "destination": "/index.html" },
+    { "source": "/admin", "destination": "/index.html" },
+    { "source": "/superadmin", "destination": "/index.html" }
+  ]
+}

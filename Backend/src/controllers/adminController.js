@@ -7,6 +7,7 @@ const SecurityIncident = require("../models/SecurityIncident");
 const SystemSetting = require("../models/SystemSetting");
 const { formatFile } = require("./fileController");
 const { recordActivity } = require("../utils/audit");
+const { removeStoredFile } = require("../utils/fileStorage");
 
 const publicUser = (user) => ({
   id: user.id,
@@ -199,7 +200,9 @@ async function deleteUser(req, res, next) {
     const user = await User.findOne({ _id: req.params.id, role: { $ne: "superadmin" } });
     if (!user) return res.status(404).json({ message: "Manageable user account not found." });
 
-    const fileIds = await FileRecord.find({ owner: user.id }).distinct("_id");
+    const files = await FileRecord.find({ owner: user.id }).select("_id storageKey");
+    await Promise.all(files.filter((file) => file.storageKey).map((file) => removeStoredFile(file.storageKey)));
+    const fileIds = files.map((file) => file._id);
     await Promise.all([
       FileRecord.deleteMany({ owner: user.id }),
       ActivityLog.updateMany(

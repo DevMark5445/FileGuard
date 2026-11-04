@@ -3,6 +3,7 @@ const {
   getFiles,
   getFilePolicy,
   registerFile,
+  uploadFile: storeUploadedFile,
   importLegacyFiles,
   deleteFile,
   verifyFile,
@@ -11,12 +12,14 @@ const {
   reviewLog,
 } = require("../controllers/fileController");
 const { authenticateToken, requireRole } = require("../middleware/auth");
+const { uploadFile } = require("../middleware/fileUpload");
 
 const router = express.Router();
 router.use(authenticateToken);
 router.get("/policy", getFilePolicy);
 router.get("/", getFiles);
 router.post("/import", importLegacyFiles);
+router.post("/upload", uploadFile, storeUploadedFile);
 router.post("/", registerFile);
 router.delete("/:id", deleteFile);
 router.post("/:id/verify", verifyFile);

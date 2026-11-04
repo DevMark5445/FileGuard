@@ -5,6 +5,7 @@ const fileRecordSchema = new mongoose.Schema(
     name: { type: String, required: true, trim: true, maxlength: 255 },
     size: { type: Number, required: true, min: 1 },
     hash: { type: String, required: true, match: /^[a-f\d]{64}$/i },
+    storageKey: { type: String, match: /^[a-f\d]{8}-(?:[a-f\d]{4}-){3}[a-f\d]{12}$/i, unique: true, sparse: true },
     owner: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true, index: true },
     latestStatus: {
       type: String,

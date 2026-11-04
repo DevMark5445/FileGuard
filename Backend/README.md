@@ -1,10 +1,10 @@
 # FileGuard authentication API
 
-The API stores users and file fingerprints/metadata in MongoDB, hashes
-passwords with bcrypt, and uses short-lived JWT bearer tokens. File contents
-are hashed in the browser and are never uploaded. Public registration always
-creates a `user`; only a signed-in `superadmin` can create an `admin` or assign
-the admin role.
+The API stores users and file metadata in MongoDB, hashes passwords with
+bcrypt, and uses short-lived JWT bearer tokens. Files may be uploaded to a
+private local storage directory and are fingerprinted by the server.
+Public registration always creates a `user`; only a signed-in `superadmin` can
+create an `admin` or assign the admin role.
 
 ## Setup
 
@@ -22,6 +22,10 @@ the admin role.
    Recovery links are random, single-use, hashed in the database, and expire
    after 30 minutes. Without SMTP, password recovery returns a clear
    configuration error.
+6. Uploaded files are stored outside public assets in `Backend/storage` by
+   default. Set `FILE_STORAGE_DIR` to an absolute path on a private, persistent
+   volume when deploying. Restrict access to that directory at the operating
+   system level and include it in backups as appropriate.
 
 Example local development values (replace the JWT secret and account details):
 
@@ -107,22 +111,27 @@ during setup. Store them securely. Rotating `JWT_SECRET` requires setting up
 MFA again.
 
 Authenticated file routes use `/api/files`: `GET /` lists the current user's
-files, `GET /policy` returns the active file policy, `POST /` registers a
-fingerprint, `POST /:id/verify` records a verification, `DELETE /:id` removes
-the owner's file metadata, and `GET /history` returns personal verification
-history. Admins and super admins can also use
+files, `GET /policy` returns the active file policy, `POST /upload` accepts a
+single multipart file in the `file` field, validates its extension and size
+against the active policy, computes its SHA-256 fingerprint, and stores its
+contents under a server-generated identifier associated with the owner.
+Original file names and upload dates are retained in MongoDB. `POST /`
+continues to register metadata and fingerprints without uploading contents.
+`POST /:id/verify` records a verification, `DELETE /:id` removes the owner's
+file record and stored content, and `GET /history` returns personal
+verification history. Admins and super admins can also use
 `POST /:id/admin-verify` to compare an authorized local copy; a reason is
 required, only its SHA-256 hash is sent to the server, and the original
-registered fingerprint is never replaced. All verification hashing occurs in
-the browser.
+registered fingerprint is never replaced.
 
 ## Frontend behavior
 
 The super-admin is redirected to `/superadmin` after sign-in. Existing
 browser-local file fingerprints are imported to that account on first access;
 file contents are not transferred. Legacy verification history remains in
-that browser because it was not server-verifiable. New registrations,
-verifications, authentication events, alerts, and administrative actions are
-recorded centrally. Admins are redirected to `/admin`, which provides
+that browser because it was not server-verifiable. New file uploads,
+registrations, verifications, authentication events, alerts, and
+administrative actions are recorded centrally. Admins are redirected to
+`/admin`, which provides
 user-management, file monitoring, authorized verification, alert
 investigation, activity, report, notification, and profile sections.

@@ -2,6 +2,9 @@ const FileRecord = require("../models/FileRecord");
 const ActivityLog = require("../models/ActivityLog");
 const SystemSetting = require("../models/SystemSetting");
 const { recordActivity } = require("../utils/audit");
+const crypto = require("node:crypto");
+const fs = require("node:fs");
+const { getStoredFilePath, removeStoredFile } = require("../utils/fileStorage");
 
 function formatFile(file) {
   return {
@@ -71,8 +74,53 @@ async function registerFile(req, res, next) {
     });
     await recordActivity(req, {
       event: "file.registered",
+      targetUserId: file.owner,
       targetFileId: file.id,
       details: { fileName: file.name, size: file.size },
+    });
+    return res.status(201).json({ file: formatFile(file) });
+  } catch (error) {
+    return next(error);
+  }
+}
+
+function hashFile(filePath) {
+  return new Promise((resolve, reject) => {
+    const hash = crypto.createHash("sha256");
+    const stream = fs.createReadStream(filePath);
+    stream.on("data", (chunk) => hash.update(chunk));
+    stream.on("error", reject);
+    stream.on("end", () => resolve(hash.digest("hex")));
+  });
+}
+
+async function uploadFile(req, res, next) {
+  let hash;
+  try {
+    hash = await hashFile(getStoredFilePath(req.file.filename));
+  } catch (error) {
+    return removeStoredFile(req.file.filename).then(() => next(error)).catch(next);
+  }
+
+  let file;
+  try {
+    file = await FileRecord.create({
+      name: req.uploadOriginalName,
+      size: req.file.size,
+      hash,
+      storageKey: req.file.filename,
+      owner: req.user.id,
+    });
+  } catch (error) {
+    return removeStoredFile(req.file.filename).then(() => next(error)).catch(next);
+  }
+
+  try {
+    await recordActivity(req, {
+      event: "file.registered",
+      targetUserId: file.owner,
+      targetFileId: file.id,
+      details: { fileName: file.name, size: file.size, uploaded: true },
     });
     return res.status(201).json({ file: formatFile(file) });
   } catch (error) {
@@ -113,6 +161,7 @@ async function importLegacyFiles(req, res, next) {
       imported.push(formatFile(file));
       await recordActivity(req, {
         event: "file.registered",
+        targetUserId: file.owner,
         targetFileId: file.id,
         details: { fileName: file.name, size: file.size, migrated: true },
       });
@@ -125,10 +174,15 @@ async function importLegacyFiles(req, res, next) {
 
 async function deleteFile(req, res, next) {
   try {
+    const existing = await FileRecord.findOne({ _id: req.params.id, owner: req.user.id });
+    if (!existing) return res.status(404).json({ message: "That registered file could not be found." });
+    if (existing.storageKey) await removeStoredFile(existing.storageKey);
     const file = await FileRecord.findOneAndDelete({ _id: req.params.id, owner: req.user.id });
     if (!file) return res.status(404).json({ message: "That registered file could not be found." });
     await recordActivity(req, {
       event: "file.deleted",
+      targetUserId: existing.owner,
+      targetFileId: existing.id,
       details: { fileName: file.name },
     });
     return res.json({ message: "File removed from monitoring." });
@@ -156,6 +210,7 @@ async function verifyFile(req, res, next) {
     const activity = await recordActivity(req, {
       event: result === "modified" ? "file.modified" : "file.verified",
       severity: result === "modified" ? "warning" : "info",
+      targetUserId: file.owner,
       targetFileId: file.id,
       details: { fileName: file.name, result, storedHash: file.hash, newHash },
     });
@@ -260,6 +315,7 @@ async function reviewLog(req, res, next) {
     await log.save();
     await recordActivity(req, {
       event: "file.alert.reviewed",
+      targetUserId: log.targetUserId || log.actorId,
       targetFileId: log.targetFileId,
       details: { fileName: log.details.fileName },
     });
@@ -270,4 +326,4 @@ async function reviewLog(req, res, next) {
   }
 }
 
-module.exports = { getFilePolicy, getFiles, registerFile, importLegacyFiles, deleteFile, verifyFile, adminVerifyFile, getHistory, reviewLog, formatFile };
+module.exports = { getFilePolicy, getFiles, registerFile, uploadFile, importLegacyFiles, deleteFile, verifyFile, adminVerifyFile, getHistory, reviewLog, formatFile };

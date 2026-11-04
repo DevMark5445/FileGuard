@@ -22,8 +22,9 @@ test("file and management routes require bearer authentication", async (context)
   await new Promise((resolve) => server.once("listening", resolve));
   const base = `http://127.0.0.1:${server.address().port}/api`;
 
-  const [files, admin, report, adminVerify, archiveActivity, restoreActivity, archivedActivity] = await Promise.all([
+  const [files, upload, admin, report, adminVerify, archiveActivity, restoreActivity, archivedActivity] = await Promise.all([
     fetch(`${base}/files`),
+    fetch(`${base}/files/upload`, { method: "POST" }),
     fetch(`${base}/admin/users`),
     fetch(`${base}/admin/reports.csv`),
     fetch(`${base}/files/507f1f77bcf86cd799439011/admin-verify`, { method: "POST" }),
@@ -32,6 +33,7 @@ test("file and management routes require bearer authentication", async (context)
     fetch(`${base}/admin/activity?archived=true`),
   ]);
   assert.equal(files.status, 401);
+  assert.equal(upload.status, 401);
   assert.equal(admin.status, 401);
   assert.equal(report.status, 401);
   assert.equal(adminVerify.status, 401);

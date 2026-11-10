@@ -4,7 +4,13 @@ const SystemSetting = require("../models/SystemSetting");
 const { recordActivity } = require("../utils/audit");
 const crypto = require("node:crypto");
 const fs = require("node:fs");
+const { TextDecoder } = require("node:util");
+const { diffLines } = require("diff");
 const { getStoredFilePath, removeStoredFile } = require("../utils/fileStorage");
+
+const MAX_TEXT_DIFF_BYTES = 2 * 1024 * 1024;
+const MAX_DIFF_LINES = 1000;
+const CHANGED_COPY_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 
 function formatFile(file) {
   return {
@@ -15,6 +21,7 @@ function formatFile(file) {
     date: file.createdAt.toISOString(),
     latestStatus: file.latestStatus,
     verificationCount: file.verificationCount,
+    hasOriginalCopy: Boolean(file.storageKey),
     owner: file.owner && file.owner.name
       ? { id: file.owner.id, name: file.owner.name, email: file.owner.email }
       : undefined,
@@ -92,6 +99,82 @@ function hashFile(filePath) {
     stream.on("error", reject);
     stream.on("end", () => resolve(hash.digest("hex")));
   });
+}
+
+function lineValues(value) {
+  const lines = value.split("\n");
+  if (lines[lines.length - 1] === "") lines.pop();
+  return lines;
+}
+
+function createTextDiff(originalBuffer, changedBuffer) {
+  if (originalBuffer.length > MAX_TEXT_DIFF_BYTES || changedBuffer.length > MAX_TEXT_DIFF_BYTES ||
+      originalBuffer.includes(0) || changedBuffer.includes(0)) {
+    return { available: false, message: "A line-by-line comparison is unavailable for binary files or files larger than 2 MB. You can download the changed copy." };
+  }
+
+  let original;
+  let changed;
+  try {
+    const decoder = new TextDecoder("utf-8", { fatal: true });
+    original = decoder.decode(originalBuffer);
+    changed = decoder.decode(changedBuffer);
+  } catch {
+    return { available: false, message: "A line-by-line comparison is unavailable for binary files or files larger than 2 MB. You can download the changed copy." };
+  }
+
+  let oldLine = 1;
+  let newLine = 1;
+  const lines = [];
+  let truncated = false;
+  for (const part of diffLines(original, changed)) {
+    const values = lineValues(part.value);
+    for (const text of values) {
+      if (part.removed || part.added) {
+        if (lines.length < MAX_DIFF_LINES) {
+          lines.push({
+            type: part.added ? "added" : "removed",
+            oldLine: part.added ? null : oldLine,
+            newLine: part.removed ? null : newLine,
+            text,
+          });
+        } else {
+          truncated = true;
+        }
+      }
+      if (!part.added) oldLine += 1;
+      if (!part.removed) newLine += 1;
+    }
+  }
+  return { available: true, lines, truncated };
+}
+
+async function getTextDiff(originalPath, changedPath) {
+  const [originalStat, changedStat] = await Promise.all([
+    fs.promises.stat(originalPath),
+    fs.promises.stat(changedPath),
+  ]);
+  if (originalStat.size > MAX_TEXT_DIFF_BYTES || changedStat.size > MAX_TEXT_DIFF_BYTES) {
+    return { available: false, message: "A line-by-line comparison is unavailable for binary files or files larger than 2 MB. You can download the changed copy." };
+  }
+  const [originalBuffer, changedBuffer] = await Promise.all([
+    fs.promises.readFile(originalPath),
+    fs.promises.readFile(changedPath),
+  ]);
+  return createTextDiff(originalBuffer, changedBuffer);
+}
+
+async function clearExpiredChangedCopy(log) {
+  if (!log.changedFileKey || !log.changedFileExpiresAt ||
+      log.changedFileExpiresAt.getTime() > Date.now()) {
+    return false;
+  }
+  await removeStoredFile(log.changedFileKey);
+  await ActivityLog.updateOne(
+    { _id: log._id, changedFileKey: log.changedFileKey },
+    { $unset: { changedFileKey: "", changedFileExpiresAt: "" } }
+  );
+  return true;
 }
 
 async function uploadFile(req, res, next) {
@@ -193,59 +276,101 @@ async function deleteFile(req, res, next) {
 }
 
 async function verifyFile(req, res, next) {
-  const { hash } = req.body || {};
-  if (typeof hash !== "string" || !/^[a-f\d]{64}$/i.test(hash)) {
-    return res.status(400).json({ message: "A valid SHA-256 file fingerprint is required." });
-  }
-
+  let keepUpload = false;
   try {
     const file = await FileRecord.findOne({ _id: req.params.id, owner: req.user.id });
-    if (!file) return res.status(404).json({ message: "That registered file could not be found." });
+    if (!file) {
+      await removeStoredFile(req.file.filename);
+      return res.status(404).json({ message: "That registered file could not be found." });
+    }
+    if (!file.storageKey) {
+      await removeStoredFile(req.file.filename);
+      return res.status(409).json({ message: "This older registration has no saved original file. Remove and register it again to enable change comparisons." });
+    }
 
-    const result = hash.toLowerCase() === file.hash ? "intact" : "modified";
+    const newHash = await hashFile(getStoredFilePath(req.file.filename));
+    const result = newHash === file.hash ? "intact" : "modified";
+    const diff = result === "modified"
+      ? await getTextDiff(
+        getStoredFilePath(file.storageKey),
+        getStoredFilePath(req.file.filename)
+      )
+      : undefined;
+    const changedFileExpiresAt = result === "modified"
+      ? new Date(Date.now() + CHANGED_COPY_RETENTION_MS)
+      : undefined;
     file.latestStatus = result;
     file.verificationCount += 1;
     await file.save();
-    const newHash = hash.toLowerCase();
     const activity = await recordActivity(req, {
       event: result === "modified" ? "file.modified" : "file.verified",
       severity: result === "modified" ? "warning" : "info",
       targetUserId: file.owner,
       targetFileId: file.id,
       details: { fileName: file.name, result, storedHash: file.hash, newHash },
+      ...(result === "modified" ? {
+        changedFileKey: req.file.filename,
+        changedFileExpiresAt,
+      } : {}),
     });
+    if (result === "modified") keepUpload = true;
+    else await removeStoredFile(req.file.filename);
 
     return res.json({
       log: {
         id: activity.id,
         fileName: file.name,
-        date: new Date().toISOString(),
+        date: activity.createdAt.toISOString(),
         result,
         reviewed: false,
         storedHash: file.hash,
         newHash,
+        ...(diff ? { diff } : {}),
+        changedCopyAvailable: result === "modified",
+        ...(changedFileExpiresAt ? { changedFileExpiresAt: changedFileExpiresAt.toISOString() } : {}),
       },
     });
   } catch (error) {
+    if (!keepUpload) {
+      try {
+        await removeStoredFile(req.file.filename);
+      } catch (cleanupError) {
+        return next(cleanupError);
+      }
+    }
     if (error.name === "CastError") return res.status(404).json({ message: "That registered file could not be found." });
     return next(error);
   }
 }
 
 async function adminVerifyFile(req, res, next) {
-  const { hash, reason } = req.body || {};
-  if (typeof hash !== "string" || !/^[a-f\d]{64}$/i.test(hash)) {
-    return res.status(400).json({ message: "A valid SHA-256 file fingerprint is required." });
-  }
+  const { reason } = req.body || {};
   if (typeof reason !== "string" || !reason.trim() || reason.trim().length > 500) {
-    return res.status(400).json({ message: "A verification reason of 1–500 characters is required." });
+    return removeStoredFile(req.file.filename)
+      .then(() => res.status(400).json({ message: "A verification reason of 1–500 characters is required." }))
+      .catch(next);
   }
 
+  let keepUpload = false;
   try {
     const file = await FileRecord.findById(req.params.id).populate("owner", "name email");
-    if (!file) return res.status(404).json({ message: "That registered file could not be found." });
+    if (!file) {
+      await removeStoredFile(req.file.filename);
+      return res.status(404).json({ message: "That registered file could not be found." });
+    }
+    if (!file.storageKey) {
+      await removeStoredFile(req.file.filename);
+      return res.status(409).json({ message: "This older registration has no saved original file. Remove and register it again to enable change comparisons." });
+    }
 
-    const result = hash.toLowerCase() === file.hash ? "intact" : "modified";
+    const newHash = await hashFile(getStoredFilePath(req.file.filename));
+    const result = newHash === file.hash ? "intact" : "modified";
+    const diff = result === "modified"
+      ? await getTextDiff(getStoredFilePath(file.storageKey), getStoredFilePath(req.file.filename))
+      : undefined;
+    const changedFileExpiresAt = result === "modified"
+      ? new Date(Date.now() + CHANGED_COPY_RETENTION_MS)
+      : undefined;
     file.latestStatus = result;
     file.verificationCount += 1;
     await file.save();
@@ -254,15 +379,21 @@ async function adminVerifyFile(req, res, next) {
       severity: result === "modified" ? "warning" : "info",
       targetFileId: file.id,
       targetUserId: file.owner.id,
+      ...(result === "modified" ? {
+        changedFileKey: req.file.filename,
+        changedFileExpiresAt,
+      } : {}),
       details: {
         fileName: file.name,
         result,
         storedHash: file.hash,
-        newHash: hash.toLowerCase(),
+        newHash,
         performedByRole: req.user.role,
         authorizedReason: reason.trim(),
       },
     });
+    if (result === "modified") keepUpload = true;
+    else await removeStoredFile(req.file.filename);
     return res.json({
       log: {
         id: activity.id,
@@ -270,11 +401,21 @@ async function adminVerifyFile(req, res, next) {
         date: activity.createdAt.toISOString(),
         result,
         storedHash: file.hash,
-        newHash: hash.toLowerCase(),
+        newHash,
         owner: { name: file.owner.name, email: file.owner.email },
+        ...(diff ? { diff } : {}),
+        changedCopyAvailable: result === "modified",
+        ...(changedFileExpiresAt ? { changedFileExpiresAt: changedFileExpiresAt.toISOString() } : {}),
       },
     });
   } catch (error) {
+    if (!keepUpload) {
+      try {
+        await removeStoredFile(req.file.filename);
+      } catch (cleanupError) {
+        return next(cleanupError);
+      }
+    }
     if (error.name === "CastError") return res.status(404).json({ message: "That registered file could not be found." });
     return next(error);
   }
@@ -282,10 +423,15 @@ async function adminVerifyFile(req, res, next) {
 
 async function getHistory(req, res, next) {
   try {
+    const fileIds = await FileRecord.find({ owner: req.user.id }).distinct("_id");
     const logs = await ActivityLog.find({
-      $or: [{ actorId: req.user.id }, { targetUserId: req.user.id }],
+      $or: [
+        { targetUserId: req.user.id },
+        { actorId: req.user.id, targetFileId: { $in: fileIds } },
+      ],
       event: { $in: ["file.modified", "file.verified"] },
     }).sort({ createdAt: -1 }).limit(500);
+    const now = Date.now();
     return res.json({
       logs: logs.map((log) => ({
         id: log.id,
@@ -295,6 +441,9 @@ async function getHistory(req, res, next) {
         reviewed: Boolean(log.details.reviewed),
         storedHash: log.details.storedHash,
         newHash: log.details.newHash,
+        hasChangedCopy: Boolean(log.changedFileKey) &&
+          (!log.changedFileExpiresAt || log.changedFileExpiresAt.getTime() > now),
+        changedCopyExpiresAt: log.changedFileExpiresAt?.toISOString(),
       })),
     });
   } catch (error) {
@@ -302,11 +451,64 @@ async function getHistory(req, res, next) {
   }
 }
 
-async function reviewLog(req, res, next) {
+async function getVerificationDiff(req, res, next) {
   try {
     const log = await ActivityLog.findOne({
       _id: req.params.id,
-      actorId: req.user.id,
+      targetUserId: req.user.id,
+      event: "file.modified",
+    });
+    if (!log) return res.status(404).json({ message: "That verification record could not be found." });
+    if (await clearExpiredChangedCopy(log)) {
+      return res.status(404).json({ message: "The changed copy has expired and is no longer available." });
+    }
+    const file = await FileRecord.findOne({ _id: log.targetFileId, owner: req.user.id });
+    if (!file?.storageKey || !log.changedFileKey) {
+      return res.status(404).json({ message: "The original or changed copy is no longer available for comparison." });
+    }
+    const diff = await getTextDiff(
+      getStoredFilePath(file.storageKey),
+      getStoredFilePath(log.changedFileKey)
+    );
+    return res.json({ diff });
+  } catch (error) {
+    if (error.name === "CastError") return res.status(404).json({ message: "That verification record could not be found." });
+    return next(error);
+  }
+}
+
+async function downloadChangedFile(req, res, next) {
+  try {
+    const log = await ActivityLog.findOne({
+      _id: req.params.id,
+      targetUserId: req.user.id,
+      event: "file.modified",
+    });
+    if (!log?.changedFileKey) {
+      return res.status(404).json({ message: "That changed file could not be found." });
+    }
+    if (await clearExpiredChangedCopy(log)) {
+      return res.status(404).json({ message: "The changed copy has expired and is no longer available." });
+    }
+    const filePath = getStoredFilePath(log.changedFileKey);
+    return res.download(filePath, log.details.fileName || "changed-file", (error) => {
+      if (error && !res.headersSent) return next(error);
+    });
+  } catch (error) {
+    if (error.name === "CastError") return res.status(404).json({ message: "That changed file could not be found." });
+    return next(error);
+  }
+}
+
+async function reviewLog(req, res, next) {
+  try {
+    const fileIds = await FileRecord.find({ owner: req.user.id }).distinct("_id");
+    const log = await ActivityLog.findOne({
+      _id: req.params.id,
+      $or: [
+        { targetUserId: req.user.id },
+        { actorId: req.user.id, targetFileId: { $in: fileIds } },
+      ],
       event: "file.modified",
     });
     if (!log) return res.status(404).json({ message: "That verification record could not be found." });
@@ -326,4 +528,4 @@ async function reviewLog(req, res, next) {
   }
 }
 
-module.exports = { getFilePolicy, getFiles, registerFile, uploadFile, importLegacyFiles, deleteFile, verifyFile, adminVerifyFile, getHistory, reviewLog, formatFile };
+module.exports = { getFilePolicy, getFiles, registerFile, uploadFile, importLegacyFiles, deleteFile, verifyFile, adminVerifyFile, getHistory, getVerificationDiff, downloadChangedFile, reviewLog, formatFile, createTextDiff };

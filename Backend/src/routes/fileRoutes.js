@@ -9,22 +9,26 @@ const {
   verifyFile,
   adminVerifyFile,
   getHistory,
+  getVerificationDiff,
+  downloadChangedFile,
   reviewLog,
 } = require("../controllers/fileController");
 const { authenticateToken, requireRole } = require("../middleware/auth");
-const { uploadFile } = require("../middleware/fileUpload");
+const { receiveFile, receiveFileWithReason } = require("../middleware/fileUpload");
 
 const router = express.Router();
 router.use(authenticateToken);
 router.get("/policy", getFilePolicy);
 router.get("/", getFiles);
 router.post("/import", importLegacyFiles);
-router.post("/upload", uploadFile, storeUploadedFile);
+router.post("/upload", receiveFile, storeUploadedFile);
 router.post("/", registerFile);
 router.delete("/:id", deleteFile);
-router.post("/:id/verify", verifyFile);
-router.post("/:id/admin-verify", requireRole("admin", "superadmin"), adminVerifyFile);
+router.post("/:id/verify", receiveFile, verifyFile);
+router.post("/:id/admin-verify", requireRole("admin", "superadmin"), receiveFileWithReason, adminVerifyFile);
 router.get("/history", getHistory);
+router.get("/history/:id/diff", getVerificationDiff);
+router.get("/history/:id/changed-copy", downloadChangedFile);
 router.patch("/history/:id/review", reviewLog);
 
 module.exports = router;

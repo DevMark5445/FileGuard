@@ -111,27 +111,37 @@ during setup. Store them securely. Rotating `JWT_SECRET` requires setting up
 MFA again.
 
 Authenticated file routes use `/api/files`: `GET /` lists the current user's
-files, `GET /policy` returns the active file policy, `POST /upload` accepts a
-single multipart file in the `file` field, validates its extension and size
-against the active policy, computes its SHA-256 fingerprint, and stores its
-contents under a server-generated identifier associated with the owner.
-Original file names and upload dates are retained in MongoDB. `POST /`
-continues to register metadata and fingerprints without uploading contents.
-`POST /:id/verify` records a verification, `DELETE /:id` removes the owner's
-file record and stored content, and `GET /history` returns personal
-verification history. Admins and super admins can also use
-`POST /:id/admin-verify` to compare an authorized local copy; a reason is
-required, only its SHA-256 hash is sent to the server, and the original
-registered fingerprint is never replaced.
+files and `GET /policy` returns the active file policy. The frontend registers
+a baseline through `POST /upload`, which accepts one multipart file in the
+`file` field, validates its extension and size, computes its SHA-256
+fingerprint, and stores its contents privately under a server-generated
+identifier associated with the owner. Original file names and upload dates
+are retained in MongoDB. `POST /:id/verify` accepts the current copy as
+multipart data, compares its fingerprint and—when text content is available—
+returns changed lines with original/current line numbers. Modified copies are
+retained privately and can be retrieved by their owner through
+`GET /history/:id/changed-copy`; `GET /history/:id/diff` retrieves the diff
+again later. Changed copies are automatically deleted after 30 days; the
+verification history remains. Binary or over-2-MB files are identified as
+changed but do not receive line-by-line comparisons; their changed copies
+remain downloadable until expiry.
+`DELETE /:id` removes the owner's file record and original stored content,
+while personal verification history remains. Hash-only registrations from
+older versions must be removed and re-registered with the original file to
+enable content comparisons. `POST /` and `/import` remain available for
+metadata-only legacy records. Admins and super admins can also use
+`POST /:id/admin-verify` to upload and compare an authorized local copy with a
+required reason. As with user verification, the original is never replaced;
+the owner can view any text diff and download the changed copy.
 
 ## Frontend behavior
 
-The super-admin is redirected to `/superadmin` after sign-in. Existing
-browser-local file fingerprints are imported to that account on first access;
-file contents are not transferred. Legacy verification history remains in
-that browser because it was not server-verifiable. New file uploads,
-registrations, verifications, authentication events, alerts, and
-administrative actions are recorded centrally. Admins are redirected to
+The super-admin is redirected to `/superadmin` after sign-in. Legacy
+browser-only file lists and verification history are not automatically
+imported, because they are not tied to an authenticated owner and do not
+include original file contents. Re-register files to save a private baseline.
+New file uploads, registrations, verifications, authentication events, alerts,
+and administrative actions are recorded centrally. Admins are redirected to
 `/admin`, which provides
 user-management, file monitoring, authorized verification, alert
 investigation, activity, report, notification, and profile sections.

@@ -5,7 +5,7 @@ const os = require("node:os");
 const path = require("node:path");
 const express = require("express");
 const SystemSetting = require("../src/models/SystemSetting");
-const { uploadFile } = require("../src/middleware/fileUpload");
+const { receiveFile } = require("../src/middleware/fileUpload");
 
 test("upload middleware validates policy and stores files under generated names", async (context) => {
   const storageDirectory = await fs.mkdtemp(path.join(os.tmpdir(), "fileguard-upload-"));
@@ -15,7 +15,7 @@ test("upload middleware validates policy and stores files under generated names"
   SystemSetting.findOne = async () => ({ maximumFileSize: 4, permittedFileTypes: [".txt"] });
 
   const app = express();
-  app.post("/upload", uploadFile, (req, res) => {
+  app.post("/upload", receiveFile, (req, res) => {
     res.status(201).json({
       name: req.uploadOriginalName,
       storageKey: req.file.filename,

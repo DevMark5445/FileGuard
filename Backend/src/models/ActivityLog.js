@@ -8,6 +8,8 @@ const activityLogSchema = new mongoose.Schema(
     actorEmail: { type: String, default: "" },
     targetUserId: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null, index: true },
     targetFileId: { type: mongoose.Schema.Types.ObjectId, ref: "FileRecord", default: null, index: true },
+    changedFileKey: { type: String, match: /^[a-f\d]{8}-(?:[a-f\d]{4}-){3}[a-f\d]{12}$/i, default: null },
+    changedFileExpiresAt: { type: Date, default: null, index: true },
     details: { type: mongoose.Schema.Types.Mixed, default: {} },
     ip: { type: String, maxlength: 100, default: "" },
     userAgent: { type: String, maxlength: 500, default: "" },

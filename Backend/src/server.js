@@ -5,6 +5,7 @@ const bcrypt = require("bcryptjs");
 const app = require("./app");
 const User = require("./models/User");
 const ActivityLog = require("./models/ActivityLog");
+const { purgeExpiredChangedCopies, scheduleChangedCopyCleanup } = require("./utils/fileRetention");
 
 function validateEnvironment() {
   const required = ["MONGODB_URI", "JWT_SECRET", "SUPER_ADMIN_NAME", "SUPER_ADMIN_EMAIL", "SUPER_ADMIN_PASSWORD"];
@@ -71,6 +72,8 @@ async function start() {
   await mongoose.connect(process.env.MONGODB_URI);
   await User.updateMany({ status: { $exists: false } }, { $set: { status: "active" } });
   await ensureSuperAdmin();
+  await purgeExpiredChangedCopies();
+  scheduleChangedCopyCleanup();
 
   const port = Number(process.env.PORT) || 5000;
   app.listen(port, () => console.log(`FileGuard API listening on port ${port}`));

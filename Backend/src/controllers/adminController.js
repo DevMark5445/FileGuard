@@ -201,13 +201,17 @@ async function deleteUser(req, res, next) {
     if (!user) return res.status(404).json({ message: "Manageable user account not found." });
 
     const files = await FileRecord.find({ owner: user.id }).select("_id storageKey");
-    await Promise.all(files.filter((file) => file.storageKey).map((file) => removeStoredFile(file.storageKey)));
     const fileIds = files.map((file) => file._id);
+    const logs = await ActivityLog.find({
+      $or: [{ actorId: user.id }, { targetUserId: user.id }, { targetFileId: { $in: fileIds } }],
+    }).select("changedFileKey");
+    await Promise.all(files.filter((file) => file.storageKey).map((file) => removeStoredFile(file.storageKey)));
+    await Promise.all(logs.filter((log) => log.changedFileKey).map((log) => removeStoredFile(log.changedFileKey)));
     await Promise.all([
       FileRecord.deleteMany({ owner: user.id }),
       ActivityLog.updateMany(
           { $or: [{ actorId: user.id }, { targetUserId: user.id }, { targetFileId: { $in: fileIds } }] },
-          { $unset: { actorId: "", targetUserId: "", targetFileId: "" }, $set: { actorEmail: "", details: { redacted: true } } }
+          { $unset: { actorId: "", targetUserId: "", targetFileId: "", changedFileKey: "", changedFileExpiresAt: "" }, $set: { actorEmail: "", details: { redacted: true } } }
       ),
       User.deleteOne({ _id: user.id }),
     ]);

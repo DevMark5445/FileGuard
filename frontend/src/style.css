@@ -93,6 +93,11 @@
   z-index: 9;
 }
 
+.toast-success { background: #16794b; color: #fff; }
+.toast-error { background: #b3261e; color: #fff; }
+.toast-warning { background: #a65300; color: #fff; }
+.toast-info { background: #1769aa; color: #fff; }
+
 .page-head .pt,
 .pt {
   margin: 0 0 0.3rem;

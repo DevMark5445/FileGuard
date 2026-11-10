@@ -1,13 +1,12 @@
 const API_BASE_URL = import.meta.env.VITE_API_URL || "/api";
-const FILES_KEY = "fileguard.files";
-const HISTORY_KEY = "fileguard.history";
 
 async function request(path, options = {}) {
   const token = window.localStorage.getItem("fg_token");
+  const isMultipart = options.body instanceof FormData;
   const response = await fetch(`${API_BASE_URL}${path}`, {
     ...options,
     headers: {
-      "Content-Type": "application/json",
+      ...(isMultipart ? {} : { "Content-Type": "application/json" }),
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...options.headers,
     },
@@ -20,32 +19,22 @@ async function request(path, options = {}) {
   return body;
 }
 
-async function hashFile(file) {
-  if (!window.crypto?.subtle) {
-    throw new Error("File hashing requires a secure browser context (HTTPS or localhost).");
+async function requestBlob(path) {
+  const token = window.localStorage.getItem("fg_token");
+  const response = await fetch(`${API_BASE_URL}${path}`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  });
+  if (!response.ok) {
+    const body = await response.json();
+    throw new Error(body.message || "The FileGuard request failed.");
   }
-
-  const bytes = await file.arrayBuffer();
-  const digest = await window.crypto.subtle.digest("SHA-256", bytes);
-  return [...new Uint8Array(digest)]
-    .map((byte) => byte.toString(16).padStart(2, "0"))
-    .join("");
+  return response.blob();
 }
 
 function assertAuthenticated() {
   if (!window.localStorage.getItem("fg_token")) {
     throw new Error("Sign in to use FileGuard.");
   }
-}
-
-function readLegacyList(key) {
-  const saved = window.localStorage.getItem(key);
-  if (saved === null) return [];
-  const list = JSON.parse(saved);
-  if (!Array.isArray(list)) {
-    throw new Error("Saved FileGuard data is invalid. Clear this site's storage and try again.");
-  }
-  return list;
 }
 
 export const api = {
@@ -56,35 +45,23 @@ export const api = {
 
   async getFiles() {
     assertAuthenticated();
-    let { files } = await request("/files");
-    const legacyFiles = readLegacyList(FILES_KEY);
-    if (legacyFiles.length) {
-      for (let index = 0; index < legacyFiles.length; index += 100) {
-        await request("/files/import", {
-          method: "POST",
-          body: JSON.stringify({ files: legacyFiles.slice(index, index + 100) }),
-        });
-      }
-      window.localStorage.removeItem(FILES_KEY);
-      ({ files } = await request("/files"));
-    }
+    const { files } = await request("/files");
     return files;
   },
 
   async getHistory() {
     assertAuthenticated();
     const { logs } = await request("/files/history");
-    const legacyLogs = readLegacyList(HISTORY_KEY);
-    return [...logs, ...legacyLogs.filter((legacy) => !logs.some((log) => log.id === legacy.id))]
-      .sort((left, right) => new Date(right.date) - new Date(left.date));
+    return logs;
   },
 
   async addFile(file) {
     assertAuthenticated();
-    const hash = await hashFile(file);
-    const { file: record } = await request("/files", {
+    const body = new FormData();
+    body.append("file", file, file.name);
+    const { file: record } = await request("/files/upload", {
       method: "POST",
-      body: JSON.stringify({ name: file.name, size: file.size, hash }),
+      body,
     });
     return record;
   },
@@ -96,23 +73,39 @@ export const api = {
 
   async verify(id, file) {
     assertAuthenticated();
-    const hash = await hashFile(file);
+    const body = new FormData();
+    body.append("file", file, file.name);
     const { log } = await request(`/files/${encodeURIComponent(id)}/verify`, {
       method: "POST",
-      body: JSON.stringify({ hash }),
+      body,
     });
     return log;
   },
 
+  async getVerificationDiff(id) {
+    assertAuthenticated();
+    return request(`/files/history/${encodeURIComponent(id)}/diff`);
+  },
+
+  async getChangedCopy(id) {
+    assertAuthenticated();
+    return requestBlob(`/files/history/${encodeURIComponent(id)}/changed-copy`);
+  },
+
+  async downloadChangedCopy(id, name) {
+    const blob = await this.getChangedCopy(id);
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = name || "changed-file";
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  },
+
   async reviewLog(id) {
     assertAuthenticated();
-    const legacyLogs = readLegacyList(HISTORY_KEY);
-    if (legacyLogs.some((log) => log.id === id)) {
-      window.localStorage.setItem(HISTORY_KEY, JSON.stringify(legacyLogs.map((log) => (
-        log.id === id ? { ...log, reviewed: true } : log
-      ))));
-      return;
-    }
     await request(`/files/history/${encodeURIComponent(id)}/review`, { method: "PATCH" });
   },
 };
@@ -145,10 +138,12 @@ export const adminApi = {
   },
 
   async verifyFile(fileId, file, reason) {
-    const hash = await hashFile(file);
+    const body = new FormData();
+    body.append("file", file, file.name);
+    body.append("reason", reason);
     return request(`/files/${encodeURIComponent(fileId)}/admin-verify`, {
       method: "POST",
-      body: JSON.stringify({ hash, reason }),
+      body,
     });
   },
 

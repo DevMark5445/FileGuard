@@ -34,7 +34,7 @@ export default function MyFiles() {
 
   return (
     <>
-      <PageHead title="My files" sub="Register a file to save its SHA-256 fingerprint." />
+      <PageHead title="My files" sub="Register a file to securely save its original copy and SHA-256 fingerprint for later comparison." />
       <Panel>
         <label
           onDragOver={(e) => { e.preventDefault(); setOver(true); }}
@@ -48,11 +48,11 @@ export default function MyFiles() {
         <FormError>{err}</FormError>
       </Panel>
       <Panel title={`Registered files (${files.length})`}>
-        {loading ? <Spinner /> : error ? <ErrorText>{error}</ErrorText> : !files.length ? <Empty>No files registered. Choose a file above to create its fingerprint.</Empty> : (
+        {loading ? <Spinner /> : error ? <ErrorText>{error}</ErrorText> : !files.length ?         <Empty>No files registered. Choose a file above to save its original copy and fingerprint.</Empty> : (
           <Table head={["Name", "Size", "Original SHA-256", "Registered", ""]}>
             {files.map((f) => (
               <tr key={f.id}>
-                <Td>{f.name}</Td><Td>{fmtSize(f.size)}</Td>
+                <Td>{f.name}{!f.hasOriginalCopy && <><br /><span className="hs">Original copy not saved; remove and re-register to compare changes.</span></>}</Td><Td>{fmtSize(f.size)}</Td>
                 <Td className="font-mono text-xs text-mute"><span title={f.hash}>{f.hash.slice(0, 16)}…{f.hash.slice(-8)}</span></Td>
                 <Td>{fmtDate(f.date)}</Td>
                 <Td className="whitespace-nowrap"><SmallBtn onClick={() => copy(f.hash)}>Copy hash</SmallBtn> <SmallBtn onClick={() => remove(f)}>Remove</SmallBtn></Td>

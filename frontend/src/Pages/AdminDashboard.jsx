@@ -140,7 +140,7 @@ function Files({ files, total, skip, onPage, allowVerify, verifyingId, onVerify 
 
   return (
     <Panel title="System-wide monitored files">
-      <p className="sub">This view contains file metadata and SHA-256 fingerprints only. File contents stay on the owner’s device.</p>
+      <p className="sub">This view contains file metadata and SHA-256 fingerprints. Stored originals and changed copies remain private to their owner.</p>
       {!files.length ? <Empty>No files are registered.</Empty> : (
         <Table head={["File / ID", "Owner", "Registered", "Integrity", "Verification"]}>
           {files.map((file) => (
@@ -168,7 +168,7 @@ function Files({ files, total, skip, onPage, allowVerify, verifyingId, onVerify 
                     }
                   });
                 }}>
-                  <p>Select the authorized current copy. The browser hashes it locally; the server compares it with the original registered hash and never replaces that original.</p>
+                  <p>Select the authorized current copy. FileGuard compares it with the saved original, and the owner can view any text changes and download the changed copy. The original is never replaced.</p>
                   <label>Authorized file copy<input name="file" type="file" required /></label>
                   <label>Reason for verification<input required maxLength="500" value={reason} onChange={(event) => setReason(event.target.value)} placeholder="Document authorization for this check" /></label>
                   <button className="btn" type="submit" disabled={verifyingId === file.id}>{verifyingId === file.id ? "Checking…" : "Compare with original"}</button>

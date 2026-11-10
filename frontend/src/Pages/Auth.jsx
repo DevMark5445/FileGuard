@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { authenticate } from "../auth.js";
+import { useToast } from "../context/ToastContext.jsx";
 
 const samples = [
   ["Registered", "9f86d081884c7d659a2feaa0c55ad015…", "original"],
@@ -10,6 +11,7 @@ const samples = [
 export default function Auth({ mode, onSuccess }) {
   const isRegister = mode === "register";
   const navigate = useNavigate();
+  const toast = useToast();
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -49,9 +51,20 @@ export default function Auth({ mode, onSuccess }) {
       }
       const user = result;
       onSuccess(user);
+      toast(isRegister ? "Account created successfully." : "Welcome back! Login successful.", "success");
       navigate("/", { replace: true });
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Could not sign in.");
+      const message = reason instanceof Error ? reason.message : "Could not sign in.";
+      setError(message);
+      if (!isRegister) {
+        if (reason?.status === 401) {
+          toast("Invalid email or password.", "error");
+        } else if (reason?.status === 403) {
+          toast("Your account is not active. Contact a FileGuard administrator.", "warning");
+        } else {
+          toast(message, "error");
+        }
+      }
     } finally {
       setBusy(false);
     }

@@ -59,11 +59,11 @@ export const api = {
     assertAuthenticated();
     const body = new FormData();
     body.append("file", file, file.name);
-    const { file: record } = await request("/files/upload", {
+    const { file: record, scan } = await request("/files/upload", {
       method: "POST",
       body,
     });
-    return record;
+    return { ...record, scan };
   },
 
   async deleteFile(id) {
@@ -90,6 +90,23 @@ export const api = {
   async getChangedCopy(id) {
     assertAuthenticated();
     return requestBlob(`/files/history/${encodeURIComponent(id)}/changed-copy`);
+  },
+
+  async downloadFile(id) {
+    assertAuthenticated();
+    return requestBlob(`/files/${encodeURIComponent(id)}/download`);
+  },
+
+  async downloadStoredFile(id, name) {
+    const blob = await this.downloadFile(id);
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = name || "file";
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
   },
 
   async downloadChangedCopy(id, name) {
@@ -144,6 +161,13 @@ export const adminApi = {
     return request(`/files/${encodeURIComponent(fileId)}/admin-verify`, {
       method: "POST",
       body,
+    });
+  },
+
+  async verifyStoredFile(fileId) {
+    assertAuthenticated();
+    return request(`/admin/files/${encodeURIComponent(fileId)}/verify-stored`, {
+      method: "POST",
     });
   },
 

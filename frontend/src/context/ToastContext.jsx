@@ -22,7 +22,10 @@ export function ToastProvider({ children }) {
           className={`toast toast-${notification.type}`}
           role={notification.type === "error" ? "alert" : "status"}
         >
-          {notification.message}
+          <span className="toast-indicator" aria-hidden="true">
+            {notification.type === "success" ? "✓" : notification.type === "error" ? "!" : "•"}
+          </span>
+          <span>{notification.message}</span>
         </div>
       )}
     </ToastContext.Provider>

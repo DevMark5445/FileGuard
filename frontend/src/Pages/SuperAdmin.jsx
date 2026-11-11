@@ -8,6 +8,7 @@ const sections = [
   ["overview", "Overview"],
   ["users", "Users & admins"],
   ["files", "Registered files"],
+  ["scans", "File scan history"],
   ["alerts", "Security alerts"],
   ["activity", "Activity log"],
   ["incidents", "Incidents"],
@@ -23,6 +24,7 @@ const emptyStats = {
   superadmins: 0,
   totalFiles: 0,
   modifiedFiles: 0,
+  flaggedFiles: 0,
   verified: 0,
   modified: 0,
   openIncidents: 0,
@@ -33,9 +35,9 @@ function eventLabel(event) {
 }
 
 function statusPill(status) {
-  const tone = ["active", "intact", "resolved"].includes(status) ? "ok"
-    : ["suspended", "deactivated", "modified", "critical", "high"].includes(status) ? "bad" : "n";
-  return <span className={`pill ${tone}`}>{status}</span>;
+  const tone = ["active", "intact", "resolved", "healthy", "clean", "valid", "matched"].includes(status) ? "ok"
+    : ["suspended", "deactivated", "modified", "malicious", "critical", "high", "corrupted", "infected", "invalid"].includes(status) ? "bad" : "n";
+  return <span className={`pill ${tone}`}>{(status || "open").replaceAll("_", " ")}</span>;
 }
 
 function formatBytes(bytes) {
@@ -53,6 +55,7 @@ function Overview({ stats, activity, onOpen }) {
         <Stat n={stats.activeUsers} label="Active accounts" tone="ok" />
         <Stat n={stats.admins} label="Administrators" />
         <Stat n={stats.totalFiles} label="Monitored files" />
+        <Stat n={stats.flaggedFiles} label="Files needing review" tone={stats.flaggedFiles ? "bad" : ""} />
         <Stat n={stats.verified} label="Successful checks" tone="ok" />
         <Stat n={stats.modified} label="Detected changes" tone={stats.modified ? "bad" : ""} />
         <Stat n={stats.openIncidents} label="Open incidents" tone={stats.openIncidents ? "bad" : ""} />
@@ -181,9 +184,9 @@ function Users({ users, total, skip, onPage, query, onSearch, busy, onAction, on
 function RegisteredFiles({ files, total, skip, onPage }) {
   return (
     <Panel title={`System-wide file metadata (${files.length})`}>
-      <p className="sub">Files stay on their owners’ devices. This view contains only names, sizes, fingerprints, ownership, and verification status.</p>
+      <p className="sub">Stored file contents are private. This view contains names, sizes, fingerprints, ownership, verification status, and scan findings. Findings are reported, not blocked.</p>
       {!files.length ? <Empty>No registered files yet.</Empty> : (
-        <Table head={["File", "Owner", "Size", "Registered", "Latest check", "File ID", "Fingerprint"]}>
+        <Table head={["File", "Owner", "Size", "Registered", "Latest check", "Security scan", "File ID", "Fingerprint"]}>
           {files.map((file) => (
             <tr key={file.id}>
               <Td><strong>{file.name}</strong></Td>
@@ -191,8 +194,32 @@ function RegisteredFiles({ files, total, skip, onPage }) {
               <Td>{formatBytes(file.size)}</Td>
               <Td>{fmtDate(file.date)}</Td>
               <Td>{statusPill(file.latestStatus || "registered")}<br /><span className="hs">{file.verificationCount} checks</span></Td>
+              <Td>{statusPill(file.securityStatus || "not_scanned")}</Td>
               <Td><span className="mono admin-hash">{file.id}</span></Td>
               <Td><span className="mono admin-hash" title={file.hash}>{file.hash}</span></Td>
+            </tr>
+          ))}
+        </Table>
+      )}
+      <Pagination total={total} skip={skip} onPage={onPage} />
+    </Panel>
+  );
+}
+
+function FileScanHistory({ scans, total, skip, onPage }) {
+  return (
+    <Panel title="File security scan history">
+      <p className="sub">Review structural checks, ClamAV signature results, and baseline comparisons. ClamAV does not provide behavioral sandboxing or prove a file is harmless.</p>
+      {!scans.length ? <Empty>No file scans have been recorded.</Empty> : (
+        <Table head={["File / owner", "Result", "Structure", "Malware", "Integrity", "Scanned"]}>
+          {scans.map((scan) => (
+            <tr key={scan.id}>
+              <Td><strong>{scan.fileName}</strong><br /><span className="hs">{scan.owner?.name || "Deleted account"} · {scan.owner?.email || "—"}</span><br /><span className="hs mono">{scan.fileId || "No registered baseline"}</span></Td>
+              <Td>{statusPill(scan.securityStatus)}</Td>
+              <Td>{statusPill(scan.structureStatus)}<br /><span className="hs">{scan.structureMessage}</span></Td>
+              <Td>{statusPill(scan.malwareStatus)}<br /><span className="hs">{scan.malwareSignature || scan.malwareMessage}</span></Td>
+              <Td>{statusPill(scan.integrityStatus)}{scan.baselineHash && <details><summary>Hashes</summary><span className="hs mono">Baseline: {scan.baselineHash}<br />Checked: {scan.fileHash}</span></details>}</Td>
+              <Td>{fmtDate(scan.date)}</Td>
             </tr>
           ))}
         </Table>
@@ -419,6 +446,9 @@ export default function SuperAdmin() {
   const [files, setFiles] = useState([]);
   const [filesTotal, setFilesTotal] = useState(0);
   const [fileSkip, setFileSkip] = useState(0);
+  const [scans, setScans] = useState([]);
+  const [scansTotal, setScansTotal] = useState(0);
+  const [scanSkip, setScanSkip] = useState(0);
   const [activity, setActivity] = useState([]);
   const [activityTotal, setActivityTotal] = useState(0);
   const [activitySkip, setActivitySkip] = useState(0);
@@ -447,6 +477,11 @@ export default function SuperAdmin() {
       setFiles(records);
       setFilesTotal(total);
     }
+    if (section === "scans") {
+      const { scans: records, total } = await adminApi.get(`/scan-history?limit=${PAGE_SIZE}&skip=${scanSkip}`);
+      setScans(records);
+      setScansTotal(total);
+    }
     if (section === "alerts") {
       const { activity: events, total } = await adminApi.get(`/activity?limit=${PAGE_SIZE}&skip=${alertSkip}&severity=alerts`);
       setActivity(events);
@@ -459,7 +494,7 @@ export default function SuperAdmin() {
     }
     if (section === "incidents") setIncidents((await adminApi.get("/incidents")).incidents);
     if (section === "settings") setSettings((await adminApi.get("/settings")).settings);
-  }, [section, userSkip, userQuery, fileSkip, activitySkip, alertSkip]);
+  }, [section, userSkip, userQuery, fileSkip, scanSkip, activitySkip, alertSkip]);
 
   useEffect(() => {
     let active = true;
@@ -550,6 +585,7 @@ export default function SuperAdmin() {
               {section === "overview" && <Overview stats={stats} activity={recentActivity} onOpen={setSection} />}
               {section === "users" && <Users users={users} total={usersTotal} skip={userSkip} onPage={setUserSkip} query={userQuery} onSearch={(query) => { setUserQuery(query); setUserSkip(0); }} busy={busy} onAction={changeUser} onCreateAdmin={createAdmin} onDetails={getUserDetails} onResetAccess={resetAdminAccess} />}
               {section === "files" && <RegisteredFiles files={files} total={filesTotal} skip={fileSkip} onPage={setFileSkip} />}
+              {section === "scans" && <FileScanHistory scans={scans} total={scansTotal} skip={scanSkip} onPage={setScanSkip} />}
               {section === "alerts" && <Panel title="Security alerts"><p className="sub">A hash mismatch records a changed file; it does not, by itself, prove an attack.</p><ActivityTable activity={activity} total={activityTotal} skip={alertSkip} onPage={setAlertSkip} /></Panel>}
               {section === "activity" && <Panel title="System activity log"><ActivityTable activity={activity} total={activityTotal} skip={activitySkip} onPage={setActivitySkip} /></Panel>}
               {section === "incidents" && <Incidents incidents={incidents} busy={busy} onCreate={createIncident} onUpdate={updateIncident} />}

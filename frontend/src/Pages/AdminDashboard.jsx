@@ -4,6 +4,7 @@ import { profileApi } from "../auth.js";
 import { Empty, ErrorText, PageHead, Panel, SmallBtn, Spinner, Stat, Table, Td } from "../components/UI.jsx";
 import { useToast } from "../context/ToastContext.jsx";
 import { fmtDate } from "../utils.js";
+import FileDiff from "../components/FileDiff.jsx";
 
 const PAGE_SIZE = 50;
 const sections = [
@@ -11,6 +12,7 @@ const sections = [
   ["users", "User Management"],
   ["files", "File Monitoring"],
   ["verify", "File Verification"],
+  ["scans", "File Scan History"],
   ["alerts", "Security Alerts"],
   ["history", "Verification History"],
   ["activity", "Activity Logs"],
@@ -19,16 +21,16 @@ const sections = [
   ["profile", "My Profile"],
 ];
 
-const defaultStats = { totalUsers: 0, totalFiles: 0, modifiedFiles: 0, verified: 0, modified: 0, openIncidents: 0 };
+const defaultStats = { totalUsers: 0, totalFiles: 0, modifiedFiles: 0, flaggedFiles: 0, verified: 0, modified: 0, openIncidents: 0 };
 
 function eventLabel(event = "") {
   return event.replaceAll(".", " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
 function Status({ value }) {
-  const tone = ["active", "intact", "resolved"].includes(value) ? "ok"
-    : ["suspended", "deactivated", "modified", "high"].includes(value) ? "bad" : "n";
-  return <span className={`pill ${tone}`}>{value || "open"}</span>;
+  const tone = ["active", "intact", "resolved", "healthy", "clean", "valid", "matched"].includes(value) ? "ok"
+    : ["suspended", "deactivated", "modified", "malicious", "high", "corrupted", "infected", "invalid"].includes(value) ? "bad" : "n";
+  return <span className={`pill ${tone}`}>{(value || "open").replaceAll("_", " ")}</span>;
 }
 
 function Pagination({ total, skip, onChange }) {
@@ -49,6 +51,7 @@ function Overview({ stats, alerts, activity, onOpen }) {
         <Stat n={stats.totalUsers} label="Registered users" />
         <Stat n={stats.totalFiles} label="Monitored files" />
         <Stat n={stats.modifiedFiles} label="Files changed" tone={stats.modifiedFiles ? "bad" : ""} />
+        <Stat n={stats.flaggedFiles} label="Files needing review" tone={stats.flaggedFiles ? "bad" : ""} />
         <Stat n={stats.openIncidents} label="Open incidents" tone={stats.openIncidents ? "bad" : ""} />
         <Stat n={stats.verified} label="Successful checks" tone="ok" />
         <Stat n={stats.modified} label="Detected modifications" tone={stats.modified ? "bad" : ""} />
@@ -133,16 +136,18 @@ function Users({ users, total, skip, onPage, onStatus, onDetails }) {
   );
 }
 
-function Files({ files, total, skip, onPage, allowVerify, verifyingId, onVerify }) {
+function Files({ files, total, skip, onPage, allowVerify, verifyingId, onVerify, onVerifyStored }) {
   const [selectedFile, setSelectedFile] = useState(null);
   const [reason, setReason] = useState("");
   const [result, setResult] = useState(null);
+  const [showChanges, setShowChanges] = useState(false);
+  const toast = useToast();
 
   return (
     <Panel title="System-wide monitored files">
-      <p className="sub">This view contains file metadata and SHA-256 fingerprints. Stored originals and changed copies remain private to their owner.</p>
+      <p className="sub">This view contains file metadata and SHA-256 fingerprints. Stored file contents remain private to their owner. Scan findings are reported, not blocked.</p>
       {!files.length ? <Empty>No files are registered.</Empty> : (
-        <Table head={["File / ID", "Owner", "Registered", "Integrity", "Verification"]}>
+        <Table head={["File / ID", "Owner", "Registered", "Integrity", "Security scan", "Verification"]}>
           {files.map((file) => (
             <Fragment key={file.id}>
               <tr>
@@ -150,12 +155,14 @@ function Files({ files, total, skip, onPage, allowVerify, verifyingId, onVerify 
                 <Td>{file.owner?.name || "Unknown"}<br /><span className="hs">{file.owner?.email}</span></Td>
                 <Td>{fmtDate(file.date)}</Td>
                 <Td><Status value={file.latestStatus} /><br /><span className="hs">{file.verificationCount} checks</span></Td>
+                <Td><Status value={file.securityStatus} /></Td>
                 <Td>{allowVerify ? <SmallBtn onClick={() => {
                   setSelectedFile(selectedFile?.id === file.id ? null : file);
                   setResult(null);
+                  setShowChanges(false);
                 }}>Verify authorized copy</SmallBtn> : <span className="hs">Metadata only</span>}</Td>
               </tr>
-              {allowVerify && selectedFile?.id === file.id && <tr key={`${file.id}-verify`}><Td colSpan="5">
+              {allowVerify && selectedFile?.id === file.id && <tr key={`${file.id}-verify`}><Td colSpan="6">
                 <form className="admin-file-verify" onSubmit={(event) => {
                   event.preventDefault();
                   const form = event.currentTarget;
@@ -163,19 +170,64 @@ function Files({ files, total, skip, onPage, allowVerify, verifyingId, onVerify 
                   onVerify(file, data.get("file"), reason).then((response) => {
                     if (response) {
                       setResult(response);
+                      setShowChanges(false);
                       form.reset();
                       setReason("");
                     }
                   });
                 }}>
-                  <p>Select the authorized current copy. FileGuard compares it with the saved original, and the owner can view any text changes and download the changed copy. The original is never replaced.</p>
+                  <p>Check the stored copy on the server, or compare an authorized current copy with the original SHA-256 baseline. The baseline is never replaced.</p>
                   <label>Authorized file copy<input name="file" type="file" required /></label>
                   <label>Reason for verification<input required maxLength="500" value={reason} onChange={(event) => setReason(event.target.value)} placeholder="Document authorization for this check" /></label>
                   <button className="btn" type="submit" disabled={verifyingId === file.id}>{verifyingId === file.id ? "Checking…" : "Compare with original"}</button>
-                  {result && <p role="status">Result: <Status value={result.result} /> — original fingerprint remains unchanged.</p>}
+                  <button className="btn ghost" type="button" disabled={verifyingId === file.id} onClick={() => {
+                    onVerifyStored(file).then((response) => {
+                      if (response) setResult(response);
+                    });
+                  }}>{verifyingId === file.id ? "Checking…" : "Verify stored copy"}</button>
+                  {result && <>
+                    <p role="status">Result: <Status value={result.result} /> <Status value={result.securityStatus} /></p>
+                    <p className="hs">Structure: {result.structureStatus || "not checked"} · Malware: {result.malwareStatus || "not checked"} · Integrity: {result.integrityStatus || "not checked"}</p>
+                      {result.result === "modified" && result.diff?.available && <>
+                        <SmallBtn onClick={() => setShowChanges(!showChanges)}>
+                          {showChanges ? "Hide changes" : "View changes"}
+                        </SmallBtn>
+                        {showChanges && <FileDiff diff={result.diff} />}
+                      </>}
+                      {result.result === "modified" && result.diff && !result.diff.available && <SmallBtn onClick={() => toast(
+                        "Line-by-line changes aren't available for binary files or files over 2 MB."
+                      )}>View changes</SmallBtn>}
+                    <dl className="mt-3 grid gap-2 break-all font-mono text-xs">
+                      <div><dt className="font-sans text-mute">Registered hash</dt><dd>{result.storedHash}</dd></div>
+                      <div><dt className="font-sans text-mute">Retrieved file hash</dt><dd>{result.newHash}</dd></div>
+                    </dl>
+                  </>}
                 </form>
               </Td></tr>}
             </Fragment>
+          ))}
+        </Table>
+      )}
+      <Pagination total={total} skip={skip} onChange={onPage} />
+    </Panel>
+  );
+}
+
+function ScanHistory({ scans, total, skip, onPage }) {
+  return (
+    <Panel title="File security scan history">
+      <p className="sub">Review structure, known-signature malware, and baseline-check results. ClamAV signatures do not provide behavioral sandboxing and cannot establish that a file is harmless.</p>
+      {!scans.length ? <Empty>No file scans have been recorded.</Empty> : (
+        <Table head={["File / owner", "Result", "Structure", "Malware", "Integrity", "Scanned"]}>
+          {scans.map((scan) => (
+            <tr key={scan.id}>
+              <Td><strong>{scan.fileName}</strong><br /><span className="hs">{scan.owner?.name || "Deleted account"} · {scan.owner?.email || "—"}</span><br /><span className="hs mono">{scan.fileId || "No registered baseline"}</span></Td>
+              <Td><Status value={scan.securityStatus} /></Td>
+              <Td><Status value={scan.structureStatus} /><br /><span className="hs">{scan.structureMessage}</span></Td>
+              <Td><Status value={scan.malwareStatus} /><br /><span className="hs">{scan.malwareSignature || scan.malwareMessage}</span></Td>
+              <Td><Status value={scan.integrityStatus} />{scan.baselineHash && <details><summary>Hashes</summary><span className="hs mono">Baseline: {scan.baselineHash}<br />Checked: {scan.fileHash}</span></details>}</Td>
+              <Td>{fmtDate(scan.date)}</Td>
+            </tr>
           ))}
         </Table>
       )}
@@ -194,7 +246,7 @@ function AlertList({ alerts, total, skip, onPage, onUpdate }) {
           <div className="incident-title">
             <div>
               <h4>{alert.activity?.details?.fileName || eventLabel(alert.activity?.event)}</h4>
-              <p>{alert.activity?.details?.reason || "FileGuard recorded a security event."}</p>
+              <p>{alert.activity?.details?.reason || alert.activity?.details?.structureMessage || alert.activity?.details?.malwareMessage || "FileGuard recorded a security event."}</p>
             </div>
             <div><Status value={alert.severity} /> <Status value={alert.status} /></div>
           </div>
@@ -366,6 +418,7 @@ export default function AdminDashboard({ user, onUserUpdated }) {
   const [stats, setStats] = useState(defaultStats);
   const [users, setUsers] = useState([]);
   const [files, setFiles] = useState([]);
+  const [scans, setScans] = useState([]);
   const [alerts, setAlerts] = useState([]);
   const [openAlertCount, setOpenAlertCount] = useState(0);
   const [history, setHistory] = useState([]);
@@ -403,6 +456,10 @@ export default function AdminDashboard({ user, onUserUpdated }) {
       const response = await adminApi.get(`/files?${query}`);
       setFiles(response.files);
       setTotals((current) => ({ ...current, files: response.total }));
+    } else if (section === "scans") {
+      const response = await adminApi.get(`/scan-history?${query}`);
+      setScans(response.scans);
+      setTotals((current) => ({ ...current, scans: response.total }));
     } else if (section === "alerts" || section === "notifications") {
       const response = await adminApi.get(`/alerts?${query}${section === "notifications" ? "&status=open" : ""}`);
       setAlerts(response.alerts);
@@ -481,6 +538,15 @@ export default function AdminDashboard({ user, onUserUpdated }) {
     }, "Verification recorded. The original fingerprint was not changed.");
   };
 
+  const verifyStoredFile = (file) => runAction(async () => {
+    setVerifyingId(file.id);
+    try {
+      return (await adminApi.verifyStoredFile(file.id)).log;
+    } finally {
+      setVerifyingId("");
+    }
+  }, "Stored file integrity check recorded.");
+
   const updateAlert = (id, body) => runAction(
     () => adminApi.mutate(`/alerts/${encodeURIComponent(id)}`, "PATCH", body),
     body.escalate ? "Alert investigation updated and escalated to the super admin." : "Alert investigation updated."
@@ -523,7 +589,8 @@ export default function AdminDashboard({ user, onUserUpdated }) {
             <>
               {section === "overview" && <Overview stats={stats} alerts={alerts} activity={overviewActivity} onOpen={setSection} />}
               {section === "users" && <Users users={users} total={totals.users || 0} skip={skip} onPage={(value) => setSkips({ ...skips, users: value })} onStatus={updateStatus} onDetails={getDetails} />}
-              {(section === "files" || section === "verify") && <Files files={files} total={totals.files || 0} skip={skip} onPage={(value) => setSkips({ ...skips, [section]: value })} allowVerify={section === "verify"} verifyingId={verifyingId} onVerify={verifyFile} />}
+              {(section === "files" || section === "verify") && <Files files={files} total={totals.files || 0} skip={skip} onPage={(value) => setSkips({ ...skips, [section]: value })} allowVerify={section === "verify"} verifyingId={verifyingId} onVerify={verifyFile} onVerifyStored={verifyStoredFile} />}
+              {section === "scans" && <ScanHistory scans={scans} total={totals.scans || 0} skip={skip} onPage={(value) => setSkips({ ...skips, scans: value })} />}
               {section === "alerts" && <AlertList alerts={alerts} total={totals.alerts || 0} skip={skip} onPage={(value) => setSkips({ ...skips, alerts: value })} onUpdate={updateAlert} />}
               {section === "notifications" && <AlertList alerts={alerts} total={totals.notifications || 0} skip={skip} onPage={(value) => setSkips({ ...skips, notifications: value })} onUpdate={updateAlert} />}
               {section === "history" && <VerificationHistory history={history} total={totals.history || 0} skip={skip} onPage={(value) => setSkips({ ...skips, history: value })} />}

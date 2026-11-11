@@ -11,7 +11,8 @@ export default function Dashboard() {
   if (loading) return <Spinner />;
   if (error) return <ErrorText>{error}</ErrorText>;
   const mod = logs.filter((l) => l.result === "modified");
-  const open = mod.filter((l) => !l.reviewed).length;
+  const open = logs.filter((l) => !l.reviewed &&
+    (l.result === "modified" || l.securityStatus === "malicious")).length;
   return (
     <>
       <PageHead title="Dashboard" sub="The state of your registered files." />

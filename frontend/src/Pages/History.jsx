@@ -5,17 +5,20 @@ import { Empty, ErrorText, FormError, PageHead, Panel, SmallBtn, Spinner, Table,
 import useLoad from "../hooks/useLoad";
 import { errMsg, fmtDate } from "../utils";
 import FileDiff from "../components/FileDiff";
+import { useToast } from "../context/ToastContext";
 
 export default function History() {
   const { data: logs, loading, error, reload } = useLoad(api.getHistory, []);
   const { refreshAlerts } = useOutletContext();
+  const toast = useToast();
   const [err, setErr] = useState("");
   const [diffs, setDiffs] = useState({});
   const [diffLoading, setDiffLoading] = useState("");
   const [downloadBusy, setDownloadBusy] = useState("");
   if (loading) return <Spinner />;
   if (error) return <ErrorText>{error}</ErrorText>;
-  const open = logs.filter((l) => l.result === "modified" && !l.reviewed);
+  const open = logs.filter((log) => !log.reviewed &&
+    (log.result === "modified" || log.securityStatus === "malicious"));
   const review = async (id) => {
     setErr("");
     try { await api.reviewLog(id); reload(); await refreshAlerts(); }
@@ -30,11 +33,18 @@ export default function History() {
     setErr("");
     try {
       const { diff } = await api.getVerificationDiff(log.id);
+      if (!diff.available) {
+        toast("Line-by-line changes aren't available for binary files or files over 2 MB. The hashes confirm the file changed; you can download the changed copy.");
+        return;
+      }
       setDiffs({ ...diffs, [log.id]: diff });
     } catch (x) { setErr(errMsg(x)); }
     finally { setDiffLoading(""); }
   };
   const downloadCopy = async (log) => {
+    if (log.securityStatus !== "healthy" && !window.confirm(
+      "This changed copy did not pass all available checks. Download it anyway?"
+    )) return;
     setDownloadBusy(log.id);
     setErr("");
     try { await api.downloadChangedCopy(log.id, log.fileName); }
@@ -54,13 +64,16 @@ export default function History() {
       </Panel>
       <Panel title="All verifications">
         {!logs.length ? <Empty>No checks yet. Verify a file to see results here.</Empty> : (
-          <Table head={["File", "Checked", "Result", "Changed copy"]}>
+          <Table head={["File", "Checked", "Integrity", "Security", "Structure", "Malware", "Changed copy"]}>
             {logs.map((log) => (
               <Fragment key={log.id}>
                 <tr>
                   <Td>{log.fileName}</Td>
                   <Td>{fmtDate(log.date)}</Td>
-                  <Td><span className={`pill ${log.result === "intact" ? "ok" : "bad"}`}>{log.result === "intact" ? "Unchanged" : "Modified"}</span></Td>
+                  <Td><span className={`pill ${log.integrityStatus === "matched" ? "ok" : log.integrityStatus === "mismatched" ? "bad" : "n"}`}>{(log.integrityStatus || log.result).replaceAll("_", " ")}</span></Td>
+                  <Td><span className={`pill ${log.securityStatus === "healthy" ? "ok" : ["malicious", "corrupted", "modified"].includes(log.securityStatus) ? "bad" : ""}`}>{(log.securityStatus || "not checked").replaceAll("_", " ")}</span></Td>
+                  <Td>{(log.structureStatus || "not checked").replaceAll("_", " ")}</Td>
+                  <Td>{(log.malwareStatus || "not checked").replaceAll("_", " ")}</Td>
                   <Td>{log.hasChangedCopy ? (
                     <>
                       <SmallBtn disabled={diffLoading === log.id} onClick={() => viewDiff(log)}>{diffLoading === log.id ? "Loading…" : diffs[log.id] ? "Hide changes" : "View changes"}</SmallBtn>{" "}
@@ -69,7 +82,7 @@ export default function History() {
                     </>
                   ) : "—"}</Td>
                 </tr>
-                {diffs[log.id] && <tr key={`${log.id}-diff`}><Td colSpan="4"><FileDiff diff={diffs[log.id]} /></Td></tr>}
+                {diffs[log.id] && <tr key={`${log.id}-diff`}><Td colSpan="7"><FileDiff diff={diffs[log.id]} /></Td></tr>}
               </Fragment>
             ))}
           </Table>

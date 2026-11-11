@@ -3,6 +3,8 @@ const {
   getOverview,
   listUsers,
   getUser,
+  verifyStoredFile,
+  listScanHistory,
   updateUserStatus,
   updateUserRole,
   deleteUser,
@@ -34,6 +36,8 @@ router.get("/overview", getOverview);
 router.get("/users", listUsers);
 router.get("/users/:id", getUser);
 router.get("/files", listFiles);
+router.get("/scan-history", listScanHistory);
+router.post("/files/:id/verify-stored", verifyStoredFile);
 router.get("/activity", listActivity);
 router.post("/activity/archive", archiveActivity);
 router.post("/activity/:id/restore", restoreActivity);

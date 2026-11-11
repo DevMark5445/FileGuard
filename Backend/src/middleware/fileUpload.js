@@ -77,11 +77,6 @@ function createFileReceiver(allowReason) {
             .then(() => res.status(400).json({ message: "Only a verification reason may accompany the file." }))
             .catch(next);
         }
-        if (req.file.size < 1) {
-          return removeStoredFile(req.file.filename)
-            .then(() => res.status(400).json({ message: "File must not be empty." }))
-            .catch(next);
-        }
         fs.chmod(req.file.path, 0o600)
           .then(() => next())
           .catch((chmodError) => {

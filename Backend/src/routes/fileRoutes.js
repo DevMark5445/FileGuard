@@ -6,6 +6,7 @@ const {
   uploadFile: storeUploadedFile,
   importLegacyFiles,
   deleteFile,
+  downloadFile,
   verifyFile,
   adminVerifyFile,
   getHistory,
@@ -24,6 +25,7 @@ router.post("/import", importLegacyFiles);
 router.post("/upload", receiveFile, storeUploadedFile);
 router.post("/", registerFile);
 router.delete("/:id", deleteFile);
+router.get("/:id/download", downloadFile);
 router.post("/:id/verify", receiveFile, verifyFile);
 router.post("/:id/admin-verify", requireRole("admin", "superadmin"), receiveFileWithReason, adminVerifyFile);
 router.get("/history", getHistory);

@@ -2,12 +2,14 @@ const mongoose = require("mongoose");
 const User = require("../models/User");
 const FileRecord = require("../models/FileRecord");
 const ActivityLog = require("../models/ActivityLog");
+const ScanResult = require("../models/ScanResult");
 const SecurityAlert = require("../models/SecurityAlert");
 const SecurityIncident = require("../models/SecurityIncident");
 const SystemSetting = require("../models/SystemSetting");
 const { formatFile } = require("./fileController");
+const { hashFile } = require("../services/hashService");
 const { recordActivity } = require("../utils/audit");
-const { removeStoredFile } = require("../utils/fileStorage");
+const { getStoredFilePath, removeStoredFile } = require("../utils/fileStorage");
 
 const publicUser = (user) => ({
   id: user.id,
@@ -37,13 +39,14 @@ function referenceId(value) {
 
 async function getOverview(req, res, next) {
   try {
-    const [totalUsers, activeUsers, admins, superadmins, totalFiles, modifiedFiles, verified, modified, openIncidents, recentActivity] = await Promise.all([
+    const [totalUsers, activeUsers, admins, superadmins, totalFiles, modifiedFiles, flaggedFiles, verified, modified, openIncidents, recentActivity] = await Promise.all([
       User.countDocuments(),
       User.countDocuments({ status: "active" }),
       User.countDocuments({ role: "admin" }),
       User.countDocuments({ role: "superadmin" }),
       FileRecord.countDocuments(),
       FileRecord.countDocuments({ latestStatus: "modified" }),
+      FileRecord.countDocuments({ securityStatus: { $in: ["corrupted", "modified", "malicious", "inconclusive", "infected", "scan_unavailable"] } }),
       ActivityLog.countDocuments({ event: "file.verified" }),
       ActivityLog.countDocuments({ event: "file.modified" }),
       SecurityIncident.countDocuments({ status: { $ne: "resolved" } }),
@@ -51,7 +54,7 @@ async function getOverview(req, res, next) {
     ]);
 
     return res.json({
-      stats: { totalUsers, activeUsers, admins, superadmins, totalFiles, modifiedFiles, verified, modified, openIncidents },
+      stats: { totalUsers, activeUsers, admins, superadmins, totalFiles, modifiedFiles, flaggedFiles, verified, modified, openIncidents },
       recentActivity: recentActivity.map(formatActivity),
     });
   } catch (error) {
@@ -209,6 +212,7 @@ async function deleteUser(req, res, next) {
     await Promise.all(logs.filter((log) => log.changedFileKey).map((log) => removeStoredFile(log.changedFileKey)));
     await Promise.all([
       FileRecord.deleteMany({ owner: user.id }),
+      ScanResult.deleteMany({ owner: user.id }),
       ActivityLog.updateMany(
           { $or: [{ actorId: user.id }, { targetUserId: user.id }, { targetFileId: { $in: fileIds } }] },
           { $unset: { actorId: "", targetUserId: "", targetFileId: "", changedFileKey: "", changedFileExpiresAt: "" }, $set: { actorEmail: "", details: { redacted: true } } }
@@ -237,6 +241,105 @@ async function listFiles(req, res, next) {
     ]);
     return res.json({ files: files.map(formatFile), total, limit, skip });
   } catch (error) {
+    return next(error);
+  }
+}
+
+async function listScanHistory(req, res, next) {
+  try {
+    const limit = parseLimit(req.query.limit);
+    const skip = parseSkip(req.query.skip);
+    const [results, total] = await Promise.all([
+      ScanResult.find().sort({ createdAt: -1 }).skip(skip).limit(limit)
+        .populate("owner", "name email")
+        .populate("file", "name"),
+      ScanResult.countDocuments(),
+    ]);
+    return res.json({
+      scans: results.map((scan) => ({
+        id: scan.id,
+        fileId: scan.file?.id || null,
+        fileName: scan.fileName,
+        owner: scan.owner ? { id: scan.owner.id, name: scan.owner.name, email: scan.owner.email } : null,
+        fileHash: scan.fileHash,
+        baselineHash: scan.baselineHash,
+        securityStatus: scan.securityStatus === "infected" ? "malicious"
+          : scan.securityStatus === "scan_unavailable" ? "inconclusive" : scan.securityStatus,
+        structureStatus: scan.structureStatus,
+        structureMessage: scan.structureMessage,
+        malwareStatus: scan.malwareStatus,
+        malwareMessage: scan.malwareMessage,
+        malwareSignature: scan.malwareSignature,
+        integrityStatus: scan.integrityStatus,
+        date: scan.createdAt.toISOString(),
+      })),
+      total,
+      limit,
+      skip,
+    });
+  } catch (error) {
+    return next(error);
+  }
+}
+
+async function verifyStoredFile(req, res, next) {
+  try {
+    const file = await FileRecord.findById(req.params.id).populate("owner", "name email");
+    if (!file) return res.status(404).json({ message: "That registered file could not be found." });
+    if (!file.storageKey) {
+      return res.status(409).json({ message: "This older registration has no saved original file. Remove and register it again to enable integrity checks." });
+    }
+
+    let newHash;
+    try {
+      newHash = await hashFile(getStoredFilePath(file.storageKey));
+    } catch (error) {
+      if (error.code === "ENOENT") {
+        return res.status(409).json({ message: "The saved original file is unavailable, so its integrity cannot be checked." });
+      }
+      throw error;
+    }
+
+    const result = newHash === file.hash ? "intact" : "modified";
+    file.latestStatus = result;
+    file.verificationCount += 1;
+    if (result === "modified") {
+      if (!["malicious", "infected", "corrupted"].includes(file.securityStatus)) file.securityStatus = "modified";
+      file.integrityStatus = "mismatched";
+    } else if (file.securityStatus === "modified") {
+      file.integrityStatus = "matched";
+    }
+    await file.save();
+    const activity = await recordActivity(req, {
+      event: result === "modified" ? "file.modified" : "file.verified",
+      severity: result === "modified" ? "warning" : "info",
+      targetUserId: file.owner.id,
+      targetFileId: file.id,
+      details: {
+        fileName: file.name,
+        result,
+        storedHash: file.hash,
+        newHash,
+        verificationSource: "stored-copy",
+        securityStatus: file.securityStatus,
+        performedByRole: req.user.role,
+      },
+    });
+
+    return res.json({
+      log: {
+        id: activity.id,
+        fileName: file.name,
+        date: activity.createdAt.toISOString(),
+        result,
+        storedHash: file.hash,
+        newHash,
+        securityStatus: file.securityStatus,
+        owner: { name: file.owner.name, email: file.owner.email },
+      },
+    });
+  } catch (error) {
+    if (error.name === "CastError") return res.status(404).json({ message: "That registered file could not be found." });
     return next(error);
   }
 }
@@ -701,6 +804,8 @@ module.exports = {
   updateUserRole,
   deleteUser,
   listFiles,
+  listScanHistory,
+  verifyStoredFile,
   listActivity,
   archiveActivity,
   restoreActivity,

@@ -70,6 +70,7 @@ async function ensureSuperAdmin() {
 async function start() {
   validateEnvironment();
   await mongoose.connect(process.env.MONGODB_URI);
+  console.log("Connected to MongoDB");
   await User.updateMany({ status: { $exists: false } }, { $set: { status: "active" } });
   await ensureSuperAdmin();
   await purgeExpiredChangedCopies();

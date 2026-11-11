@@ -14,15 +14,18 @@ async function recordActivity(req, entry) {
     userAgent: req.get("user-agent") || "",
   });
 
-  if (["file.modified", "auth.login.failed", "auth.mfa.failed"].includes(entry.event)) {
+  const maliciousDetection = entry.details?.securityStatus === "malicious" ||
+    entry.details?.malwareStatus === "infected";
+  const flaggedVerification = entry.event === "file.verified" && maliciousDetection;
+  const alertEvent = ["file.modified", "file.scan.flagged", "auth.login.failed", "auth.mfa.failed"].includes(entry.event);
+  if (alertEvent || flaggedVerification) {
     await SecurityAlert.create({
       sourceActivity: activity.id,
       severity: entry.severity === "high" ? "high" : "warning",
     });
   }
 
-  const notify = entry.severity === "high" ||
-    ["file.modified", "auth.login.failed", "auth.mfa.failed"].includes(entry.event);
+  const notify = entry.severity === "high" || alertEvent || flaggedVerification;
   const smtpConfigured = ["SMTP_HOST", "SMTP_PORT", "SMTP_USER", "SMTP_PASSWORD", "SMTP_FROM"]
     .every((key) => process.env[key]);
   if (!notify || !smtpConfigured) return activity;
@@ -41,9 +44,11 @@ async function recordActivity(req, entry) {
       requireTLS: port !== 465,
       auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASSWORD },
     });
-    const summary = entry.details?.fileName
-      ? `A file integrity check detected a change to ${entry.details.fileName}. A hash mismatch indicates changed content, not necessarily an attack.`
-      : `FileGuard recorded a security event: ${entry.event}.`;
+    const summary = entry.event === "file.scan.flagged" || maliciousDetection
+      ? `FileGuard flagged ${entry.details?.fileName || "an uploaded file"} for review after a security check. Review the scan history and security alerts.`
+      : entry.details?.fileName
+        ? `A file integrity check detected a change to ${entry.details.fileName}. A hash mismatch indicates changed content, not necessarily an attack.`
+        : `FileGuard recorded a security event: ${entry.event}.`;
     await transport.sendMail({
       from: process.env.SMTP_FROM,
       to: recipients,

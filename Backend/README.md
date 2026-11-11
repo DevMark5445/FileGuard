@@ -26,6 +26,11 @@ create an `admin` or assign the admin role.
    default. Set `FILE_STORAGE_DIR` to an absolute path on a private, persistent
    volume when deploying. Restrict access to that directory at the operating
    system level and include it in backups as appropriate.
+7. Install ClamAV on the API host and keep its virus definitions current.
+   FileGuard runs `clamscan` locally for every uploaded file. Set
+   `CLAMSCAN_PATH` to the executable path if it is not on `PATH`. If ClamAV
+   cannot run, the upload is retained and its malware result is reported as
+   unavailable; the overall security status is inconclusive, never clean.
 
 Example local development values (replace the JWT secret and account details):
 
@@ -43,6 +48,8 @@ SMTP_PORT=
 SMTP_USER=
 SMTP_PASSWORD=
 SMTP_FROM=
+# Optional if clamscan is not on PATH; use the local ClamAV executable path
+CLAMSCAN_PATH=clamscan
 ```
 
 The super-admin is created on first startup when its configured email is not
@@ -89,6 +96,7 @@ incidents. Those privileged changes are restricted to the super admin.
 | `POST` | `/users/:id/reset-access` | Email recovery link to an administrator (super admin) |
 | `DELETE` | `/users/:id` | Delete a non-super-admin and associated file metadata |
 | `GET` | `/files`, `/activity`, `/incidents`, `/settings` | Read system-wide data |
+| `GET` | `/scan-history` | Review file security scan results |
 | `POST` | `/activity/archive` | Archive logs older than a supplied ISO cutoff date (admin or super admin; records remain retrievable) |
 | `GET` | `/activity?archived=true` | Retrieve archived activity |
 | `POST` | `/activity/:id/restore` | Restore an archived activity record |
@@ -100,7 +108,7 @@ incidents. Those privileged changes are restricted to the super admin.
 | `GET` / `POST` | `/mfa`, `/mfa/setup`, `/mfa/enable` | Configure super-admin MFA |
 
 Security-sensitive account and policy changes are written to the activity log.
-File modifications and failed login/MFA events generate security alerts.
+File modifications, flagged scan results, and failed login/MFA events generate security alerts.
 When SMTP is configured and security notifications are enabled, active admins
 and super admins also receive email notifications. Alerts preserve the source
 activity record while their investigation notes and status are managed
@@ -111,15 +119,37 @@ during setup. Store them securely. Rotating `JWT_SECRET` requires setting up
 MFA again.
 
 Authenticated file routes use `/api/files`: `GET /` lists the current user's
-files and `GET /policy` returns the active file policy. The frontend registers
+files, `GET /:id/download` downloads the user's stored copy, and `GET /policy`
+returns the active file policy. The frontend registers
 a baseline through `POST /upload`, which accepts one multipart file in the
-`file` field, validates its extension and size, computes its SHA-256
-fingerprint, and stores its contents privately under a server-generated
-identifier associated with the owner. Original file names and upload dates
-are retained in MongoDB. `POST /:id/verify` accepts the current copy as
-multipart data, compares its fingerprint and—when text content is available—
-returns changed lines with original/current line numbers. Modified copies are
-retained privately and can be retrieved by their owner through
+`file` field, validates its extension and size, and checks PDF, DOCX, XLSX,
+TXT, JPG/JPEG, PNG, and ZIP structures. Other permitted extensions are marked
+as structurally unsupported, not as structurally validated. The API scans each
+upload with local ClamAV before calculating its server-side SHA-256. Structural
+validation is capped at 100 MB per file and ZIP expansion at 100 MB. Files that
+exceed those safety limits are retained but their structural result is
+inconclusive. The oldest file with the same owner and name remains the original
+SHA-256 baseline; later uploads are compared with it and never replace it.
+Every scan is retained in scan history.
+
+Uploads that are malformed, differ from an existing same-name baseline, are
+flagged by ClamAV, or cannot be scanned are retained and their results are
+shown to the owner and administrators. FileGuard does not block downloads
+based on these findings. A ClamAV-unavailable scan or a scan that
+exceeds ClamAV's configured limits is never reported as clean. ClamAV checks
+for known malware signatures; it does not execute files
+in a behavioral sandbox and cannot reliably determine whether an arbitrary file
+will steal personal data, modify or encrypt files, install software, contact a
+malicious server, or exploit a vulnerability. A clean signature scan is not
+proof that a file is safe. Configure ClamAV and keep its definitions current in
+production; investigate flagged or inconclusive results before opening files.
+
+`POST /:id/verify` accepts the current copy as multipart data, scans it before
+comparison, compares its fingerprint with the original baseline, and—when text
+content is available—returns changed lines with original/current line numbers.
+Malware-positive, structurally invalid, and unscannable comparison uploads are
+retained and reported instead of rejected. Modified copies are retained
+privately and can be retrieved by their owner through
 `GET /history/:id/changed-copy`; `GET /history/:id/diff` retrieves the diff
 again later. Changed copies are automatically deleted after 30 days; the
 verification history remains. Binary or over-2-MB files are identified as

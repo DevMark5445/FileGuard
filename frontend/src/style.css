@@ -443,6 +443,27 @@ label {
 }
 
 .auth-card form label { margin: 0.9rem 0 0.3rem; }
+.password-field { position: relative; }
+.password-field input { padding-right: 2.8rem; }
+.password-visibility {
+  position: absolute;
+  top: 50%;
+  right: 0.35rem;
+  display: grid;
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+  place-items: center;
+  transform: translateY(-50%);
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--mute);
+  cursor: pointer;
+}
+.password-visibility:hover { color: var(--ink); }
+.password-visibility:focus-visible { outline: 2px solid var(--brand); outline-offset: 1px; }
+.password-visibility svg { width: 1.15rem; height: 1.15rem; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.7; }
 .auth-card .hint { margin: 1rem 0 0; color: var(--mute); font-size: 13px; }
 .auth-error { min-height: 1.2em; margin: 0.6rem 0 0; color: var(--bad); font-size: 14px; }
 .auth-submit { width: 100%; margin-top: 0.6rem; }

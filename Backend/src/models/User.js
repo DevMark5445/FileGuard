@@ -18,6 +18,7 @@ const userSchema = new mongoose.Schema(
       maxlength: 254,
       match: /^\S+@\S+\.\S+$/,
     },
+    googleId: { type: String, unique: true, sparse: true, select: false },
     passwordHash: {
       type: String,
       required: true,

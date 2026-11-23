@@ -1,5 +1,7 @@
 const bcrypt = require("bcryptjs");
+const crypto = require("node:crypto");
 const jwt = require("jsonwebtoken");
+const { OAuth2Client } = require("google-auth-library");
 const User = require("../models/User");
 const SystemSetting = require("../models/SystemSetting");
 const { recordActivity } = require("../utils/audit");
@@ -141,6 +143,106 @@ async function login(req, res, next) {
   }
 }
 
+async function googleLogin(req, res, next) {
+  const clientId = process.env.GOOGLE_CLIENT_ID;
+  const credential = req.body?.credential;
+  if (!clientId) {
+    return res.status(503).json({ message: "Google sign-in is not configured." });
+  }
+  if (typeof credential !== "string" || !credential) {
+    return res.status(400).json({ message: "A Google credential is required." });
+  }
+
+  let profile;
+  try {
+    const ticket = await new OAuth2Client(clientId).verifyIdToken({
+      idToken: credential,
+      audience: clientId,
+    });
+    profile = ticket.getPayload();
+  } catch {
+    return res.status(401).json({ message: "Google sign-in could not verify your account." });
+  }
+  if (!profile?.sub || !profile.email || profile.email_verified !== true) {
+    return res.status(401).json({ message: "Use a Google account with a verified email address." });
+  }
+
+  const email = profile.email.trim().toLowerCase();
+  try {
+    let user = await User.findOne({ googleId: profile.sub })
+      .select("+googleId +tokenVersion +mfaSecret");
+
+    if (!user) {
+      user = await User.findOne({ email }).select("+googleId +tokenVersion +mfaSecret");
+      if (user) {
+        if (user.googleId && user.googleId !== profile.sub) {
+          return res.status(409).json({ message: "This email is linked to a different Google account." });
+        }
+        user.googleId = profile.sub;
+        await user.save();
+        await recordActivity(req, {
+          event: "auth.google.linked",
+          actorId: user.id,
+          actorEmail: user.email,
+          targetUserId: user.id,
+        });
+      } else {
+        const name = (profile.name || email.split("@")[0]).trim().slice(0, 100) || "Google user";
+        user = await User.create({
+          name,
+          email,
+          passwordHash: await bcrypt.hash(crypto.randomBytes(32).toString("hex"), 12),
+          googleId: profile.sub,
+          role: "user",
+        });
+        await recordActivity(req, {
+          event: "auth.registered",
+          actorId: user.id,
+          actorEmail: user.email,
+          targetUserId: user.id,
+          details: { role: user.role, provider: "google" },
+        });
+      }
+    }
+
+    if (user.status !== "active") {
+      await recordActivity(req, {
+        event: "auth.login.failed",
+        severity: "high",
+        actorId: user.id,
+        actorEmail: user.email,
+        targetUserId: user.id,
+        details: { reason: user.status, provider: "google" },
+      });
+      return res.status(403).json({ message: "This account is not active. Contact a FileGuard administrator." });
+    }
+    if (user.role === "superadmin" && user.mfaEnabled) {
+      await recordActivity(req, {
+        event: "auth.login.mfa_challenge",
+        actorId: user.id,
+        actorEmail: user.email,
+        targetUserId: user.id,
+        details: { provider: "google" },
+      });
+      return res.json({ mfaRequired: true, challengeToken: createMfaChallenge(user) });
+    }
+
+    await recordActivity(req, {
+      event: "auth.login.succeeded",
+      actorId: user.id,
+      actorEmail: user.email,
+      targetUserId: user.id,
+      details: { provider: "google" },
+    });
+    return res.json({ user: publicUser(user), token: await createToken(user) });
+  } catch (error) {
+    if (error.code === 11000) {
+      return res.status(409).json({ message: "An account with this email already exists. Sign in with its linked Google account." });
+    }
+    return next(error);
+  }
+}
+
 async function createAdmin(req, res, next) {
   const { name, email, password } = req.body || {};
   try {
@@ -264,6 +366,7 @@ async function logout(req, res, next) {
 module.exports = {
   register,
   login,
+  googleLogin,
   createAdmin,
   getCurrentUser,
   updateCurrentUser,

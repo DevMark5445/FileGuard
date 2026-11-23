@@ -10,13 +10,17 @@ create an `admin` or assign the admin role.
 
 1. Install Node.js and start a MongoDB instance.
 2. From this directory, create a local `.env` file with the following
-   variables. Keep real credentials out of source control.
+   variables. Keep real credentials out of source control. Configure
+   `GOOGLE_CLIENT_ID` to enable Google sign-in; it is the public OAuth client ID,
+   not the client secret.
    `MONGODB_URI`, `JWT_SECRET` (at least 32 characters), `SUPER_ADMIN_NAME`,
    `SUPER_ADMIN_EMAIL`, `SUPER_ADMIN_PASSWORD` (at least 8 characters, a
    letter, and a number), `FRONTEND_ORIGIN`, and `PORT`.
 3. Run `npm install`, then `npm run dev` for development or `npm start`.
 4. Configure the frontend `VITE_API_URL` if the API is not available through
    the Vite `/api` proxy. The development proxy targets `http://localhost:5000`.
+   Set `VITE_GOOGLE_CLIENT_ID` in the frontend build environment to the same
+   OAuth client ID as `GOOGLE_CLIENT_ID` to show the Google sign-in button.
 5. To enable account recovery and email security notifications, configure all
    of `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, and `SMTP_FROM`.
    Recovery links are random, single-use, hashed in the database, and expire
@@ -165,6 +169,13 @@ required reason. As with user verification, the original is never replaced;
 the owner can view any text diff and download the changed copy.
 
 ## Frontend behavior
+
+For Google sign-in, configure the OAuth client as a Web application and add the
+frontend's production URL (and `http://localhost:5173` for local development) to
+its authorized JavaScript origins. Set `GOOGLE_CLIENT_ID` on the API host and
+`VITE_GOOGLE_CLIENT_ID` on the frontend host, then redeploy both. FileGuard
+verifies Google ID tokens on the API; the OAuth client secret is not used by
+this sign-in flow and must never be placed in frontend configuration.
 
 The super-admin is redirected to `/superadmin` after sign-in. Legacy
 browser-only file lists and verification history are not automatically

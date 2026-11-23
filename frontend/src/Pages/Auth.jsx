@@ -1,6 +1,6 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { authenticate } from "../auth.js";
+import { authenticate, authenticateWithGoogle } from "../auth.js";
 import { useToast } from "../context/ToastContext.jsx";
 
 const samples = [
@@ -23,8 +23,11 @@ function PasswordVisibilityIcon({ visible }) {
 
 export default function Auth({ mode, onSuccess }) {
   const isRegister = mode === "register";
+  const googleClientId = import.meta.env.VITE_GOOGLE_CLIENT_ID || "567748304354-vaekl40rk57g04qrsdiiv8lmb8e3sqk3.apps.googleusercontent.com";
   const navigate = useNavigate();
   const toast = useToast();
+  const googleButtonRef = useRef(null);
+  const googleCredentialHandler = useRef(null);
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -35,6 +38,69 @@ export default function Auth({ mode, onSuccess }) {
   const [challengeToken, setChallengeToken] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+
+  const handleGoogleCredential = async (credential) => {
+    if (busy) return;
+    setBusy(true);
+    setError("");
+    try {
+      const result = await authenticateWithGoogle(credential);
+      if (result?.mfaRequired) {
+        setChallengeToken(result.challengeToken);
+        return;
+      }
+      onSuccess(result);
+      toast("Signed in with Google.", "success");
+      navigate("/", { replace: true });
+    } catch (reason) {
+      const message = reason instanceof Error ? reason.message : "Could not sign in with Google.";
+      setError(message);
+      toast(message, "error");
+    } finally {
+      setBusy(false);
+    }
+  };
+  googleCredentialHandler.current = handleGoogleCredential;
+
+  useEffect(() => {
+    if (!googleClientId || !googleButtonRef.current) return undefined;
+
+    let active = true;
+    const renderGoogleButton = () => {
+      const identity = window.google?.accounts?.id;
+      if (!active || !identity || !googleButtonRef.current) return;
+      identity.initialize({
+        client_id: googleClientId,
+        callback: ({ credential }) => {
+          if (credential) void googleCredentialHandler.current(credential);
+        },
+      });
+      googleButtonRef.current.replaceChildren();
+      identity.renderButton(googleButtonRef.current, {
+        theme: "outline",
+        size: "large",
+        text: isRegister ? "signup_with" : "signin_with",
+        shape: "rectangular",
+        width: String(Math.floor(googleButtonRef.current.clientWidth)),
+      });
+    };
+
+    let script = document.querySelector('script[src="https://accounts.google.com/gsi/client"]');
+    if (!script) {
+      script = document.createElement("script");
+      script.src = "https://accounts.google.com/gsi/client";
+      script.async = true;
+      script.defer = true;
+      document.head.appendChild(script);
+    }
+    script.addEventListener("load", renderGoogleButton);
+    renderGoogleButton();
+
+    return () => {
+      active = false;
+      script.removeEventListener("load", renderGoogleButton);
+    };
+  }, [googleClientId, isRegister]);
 
   const submit = async (event) => {
     event.preventDefault();
@@ -111,6 +177,12 @@ export default function Auth({ mode, onSuccess }) {
             <Link to="/login" role="tab" aria-selected={!isRegister} className={!isRegister ? "on" : ""}>Sign in</Link>
             <Link to="/register" role="tab" aria-selected={isRegister} className={isRegister ? "on" : ""}>Register</Link>
           </div>}
+          {!challengeToken && googleClientId && (
+            <>
+              <div className="google-auth-divider"><span>or</span></div>
+              <div className="google-signin-button" ref={googleButtonRef} />
+            </>
+          )}
           <form onSubmit={submit}>
             {challengeToken ? (
               <>

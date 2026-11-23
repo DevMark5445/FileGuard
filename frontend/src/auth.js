@@ -42,7 +42,7 @@ export async function authenticate({ mode, name, email, password, challengeToken
   }
 
   const { user, token, mfaRequired, challengeToken: nextChallengeToken } = await request(
-    mode === "login" && challengeToken ? "/auth/mfa/verify" : `/auth/${mode}`,
+    challengeToken ? "/auth/mfa/verify" : `/auth/${mode}`,
     {
       method: "POST",
       body: JSON.stringify(challengeToken
@@ -51,6 +51,16 @@ export async function authenticate({ mode, name, email, password, challengeToken
     }
   );
   if (mfaRequired) return { mfaRequired, challengeToken: nextChallengeToken };
+  window.localStorage.setItem(TOKEN_KEY, token);
+  return user;
+}
+
+export async function authenticateWithGoogle(credential) {
+  const { user, token, mfaRequired, challengeToken } = await request("/auth/google", {
+    method: "POST",
+    body: JSON.stringify({ credential }),
+  });
+  if (mfaRequired) return { mfaRequired, challengeToken };
   window.localStorage.setItem(TOKEN_KEY, token);
   return user;
 }

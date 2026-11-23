@@ -2,13 +2,14 @@ import { NavLink } from "react-router-dom";
 
 export default function Navbar({ alertCount = 0, user, onSignOut }) {
   const links = user?.role === "admin"
-    ? [{ to: "/admin", label: "Admin Control Center", end: true, badge: alertCount }]
+    ? [{ to: "/admin", label: "Admin Dashboard", end: true, badge: alertCount }]
+    : user?.role === "superadmin"
+      ? [{ to: "/superadmin", label: "Super Admin Dashboard", end: true }]
     : [
       { to: "/", label: "Dashboard", end: true },
       { to: "/files", label: "My files" },
       { to: "/verify", label: "Verify a file" },
       { to: "/history", label: "History & alerts", badge: alertCount },
-      ...(user?.role === "superadmin" ? [{ to: "/superadmin", label: "Super Admin" }] : []),
     ];
 
   return (

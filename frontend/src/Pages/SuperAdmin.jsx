@@ -51,14 +51,14 @@ function Overview({ stats, activity, onOpen }) {
   return (
     <>
       <div className="stats">
-        <Stat n={stats.totalUsers} label="Registered users" />
-        <Stat n={stats.activeUsers} label="Active accounts" tone="ok" />
-        <Stat n={stats.admins} label="Administrators" />
-        <Stat n={stats.totalFiles} label="Monitored files" />
-        <Stat n={stats.flaggedFiles} label="Files needing review" tone={stats.flaggedFiles ? "bad" : ""} />
-        <Stat n={stats.verified} label="Successful checks" tone="ok" />
-        <Stat n={stats.modified} label="Detected changes" tone={stats.modified ? "bad" : ""} />
-        <Stat n={stats.openIncidents} label="Open incidents" tone={stats.openIncidents ? "bad" : ""} />
+        <Stat n={stats.totalUsers} label="Registered users" onClick={() => onOpen("users")} />
+        <Stat n={stats.activeUsers} label="Active accounts" tone="ok" onClick={() => onOpen("users")} />
+        <Stat n={stats.admins} label="Administrators" onClick={() => onOpen("users")} />
+        <Stat n={stats.totalFiles} label="Monitored files" onClick={() => onOpen("files")} />
+        <Stat n={stats.flaggedFiles} label="Files needing review" tone={stats.flaggedFiles ? "bad" : ""} onClick={() => onOpen("scans")} />
+        <Stat n={stats.verified} label="Successful checks" tone="ok" onClick={() => onOpen("scans")} />
+        <Stat n={stats.modified} label="Detected changes" tone={stats.modified ? "bad" : ""} onClick={() => onOpen("alerts")} />
+        <Stat n={stats.openIncidents} label="Open incidents" tone={stats.openIncidents ? "bad" : ""} onClick={() => onOpen("incidents")} />
       </div>
       <Panel title="Recent system activity">
         {!activity.length ? <Empty>No activity has been recorded yet.</Empty> : (

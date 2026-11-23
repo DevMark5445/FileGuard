@@ -13,6 +13,7 @@ const sections = [
   ["files", "File Monitoring"],
   ["verify", "File Verification"],
   ["scans", "File Scan History"],
+  ["incidents", "Incidents"],
   ["alerts", "Security Alerts"],
   ["history", "Verification History"],
   ["activity", "Activity Logs"],
@@ -48,13 +49,13 @@ function Overview({ stats, alerts, activity, onOpen }) {
   return (
     <>
       <div className="stats">
-        <Stat n={stats.totalUsers} label="Registered users" />
-        <Stat n={stats.totalFiles} label="Monitored files" />
-        <Stat n={stats.modifiedFiles} label="Files changed" tone={stats.modifiedFiles ? "bad" : ""} />
-        <Stat n={stats.flaggedFiles} label="Files needing review" tone={stats.flaggedFiles ? "bad" : ""} />
-        <Stat n={stats.openIncidents} label="Open incidents" tone={stats.openIncidents ? "bad" : ""} />
-        <Stat n={stats.verified} label="Successful checks" tone="ok" />
-        <Stat n={stats.modified} label="Detected modifications" tone={stats.modified ? "bad" : ""} />
+        <Stat n={stats.totalUsers} label="Registered users" onClick={() => onOpen("users")} />
+        <Stat n={stats.totalFiles} label="Monitored files" onClick={() => onOpen("files")} />
+        <Stat n={stats.modifiedFiles} label="Files changed" tone={stats.modifiedFiles ? "bad" : ""} onClick={() => onOpen("history")} />
+        <Stat n={stats.flaggedFiles} label="Files needing review" tone={stats.flaggedFiles ? "bad" : ""} onClick={() => onOpen("scans")} />
+        <Stat n={stats.openIncidents} label="Open incidents" tone={stats.openIncidents ? "bad" : ""} onClick={() => onOpen("incidents")} />
+        <Stat n={stats.verified} label="Successful checks" tone="ok" onClick={() => onOpen("history")} />
+        <Stat n={stats.modified} label="Detected modifications" tone={stats.modified ? "bad" : ""} onClick={() => onOpen("history")} />
       </div>
       <Panel title="Recent security alerts">
         {alerts.length === 0 ? <Empty>No security alerts.</Empty> : (
@@ -232,6 +233,26 @@ function ScanHistory({ scans, total, skip, onPage }) {
         </Table>
       )}
       <Pagination total={total} skip={skip} onChange={onPage} />
+    </Panel>
+  );
+}
+
+function Incidents({ incidents }) {
+  return (
+    <Panel title="Security incidents">
+      {!incidents.length ? <Empty>No security incidents have been recorded.</Empty> : (
+        <Table head={["Incident", "Severity", "Status", "Opened by", "Reported"]}>
+          {incidents.map((incident) => (
+            <tr key={incident._id}>
+              <Td><strong>{incident.title}</strong><br /><span className="hs">{incident.description}</span></Td>
+              <Td><Status value={incident.severity} /></Td>
+              <Td><Status value={incident.status} /></Td>
+              <Td>{incident.createdBy?.name || "Unknown"}</Td>
+              <Td>{fmtDate(incident.createdAt)}</Td>
+            </tr>
+          ))}
+        </Table>
+      )}
     </Panel>
   );
 }
@@ -423,6 +444,7 @@ export default function AdminDashboard({ user, onUserUpdated }) {
   const [openAlertCount, setOpenAlertCount] = useState(0);
   const [history, setHistory] = useState([]);
   const [activity, setActivity] = useState([]);
+  const [incidents, setIncidents] = useState([]);
   const [overviewActivity, setOverviewActivity] = useState([]);
   const [activityArchived, setActivityArchived] = useState(false);
   const [totals, setTotals] = useState({});
@@ -460,6 +482,9 @@ export default function AdminDashboard({ user, onUserUpdated }) {
       const response = await adminApi.get(`/scan-history?${query}`);
       setScans(response.scans);
       setTotals((current) => ({ ...current, scans: response.total }));
+    } else if (section === "incidents") {
+      const response = await adminApi.get("/incidents");
+      setIncidents(response.incidents);
     } else if (section === "alerts" || section === "notifications") {
       const response = await adminApi.get(`/alerts?${query}${section === "notifications" ? "&status=open" : ""}`);
       setAlerts(response.alerts);
@@ -591,6 +616,7 @@ export default function AdminDashboard({ user, onUserUpdated }) {
               {section === "users" && <Users users={users} total={totals.users || 0} skip={skip} onPage={(value) => setSkips({ ...skips, users: value })} onStatus={updateStatus} onDetails={getDetails} />}
               {(section === "files" || section === "verify") && <Files files={files} total={totals.files || 0} skip={skip} onPage={(value) => setSkips({ ...skips, [section]: value })} allowVerify={section === "verify"} verifyingId={verifyingId} onVerify={verifyFile} onVerifyStored={verifyStoredFile} />}
               {section === "scans" && <ScanHistory scans={scans} total={totals.scans || 0} skip={skip} onPage={(value) => setSkips({ ...skips, scans: value })} />}
+              {section === "incidents" && <Incidents incidents={incidents} />}
               {section === "alerts" && <AlertList alerts={alerts} total={totals.alerts || 0} skip={skip} onPage={(value) => setSkips({ ...skips, alerts: value })} onUpdate={updateAlert} />}
               {section === "notifications" && <AlertList alerts={alerts} total={totals.notifications || 0} skip={skip} onPage={(value) => setSkips({ ...skips, notifications: value })} onUpdate={updateAlert} />}
               {section === "history" && <VerificationHistory history={history} total={totals.history || 0} skip={skip} onPage={(value) => setSkips({ ...skips, history: value })} />}

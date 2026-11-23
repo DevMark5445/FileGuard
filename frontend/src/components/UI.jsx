@@ -75,12 +75,24 @@ export function Td({ children, className = "" }) {
   return <td className={className}>{children}</td>;
 }
 
-export function Stat({ n, label, tone = "" }) {
+export function Stat({ n, label, tone = "", onClick }) {
   const status = tone.includes("bad") ? " bad" : tone.includes("ok") ? " good" : "";
-  return (
-    <div className={`stat${status}`}>
+  const content = (
+    <>
       <div className="n">{n}</div>
       {label}
+    </>
+  );
+  if (onClick) {
+    return (
+      <button type="button" className={`stat stat-link${status}`} onClick={onClick}>
+        {content}
+      </button>
+    );
+  }
+  return (
+    <div className={`stat${status}`}>
+      {content}
     </div>
   );
 }

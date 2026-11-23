@@ -163,6 +163,18 @@
   font-weight: 600;
 }
 
+.stat-link {
+  width: 100%;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.15s ease, transform 0.15s ease;
+}
+
+.stat-link:hover { border-color: var(--brand); transform: translateY(-2px); }
+.stat-link:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+
 .stat.bad .n { color: var(--bad); }
 .stat.good .n { color: var(--ok); }
 
@@ -525,7 +537,7 @@ label {
   --sidetxt: #b9c8c4;
 }
 
-@theme inline {
+:root {
   --color-bg: var(--bg);
   --color-panel: var(--panel);
   --color-ink: var(--ink);

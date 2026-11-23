@@ -8,6 +8,9 @@ const samples = [
   ["Checked today", "2c26b46b68ffc68ff99b453c1d304134…", "changed"],
 ];
 
+let googleIdentityInitialized = false;
+let activeGoogleCredentialHandler = null;
+
 function PasswordVisibilityIcon({ visible }) {
   return visible ? (
     <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
@@ -66,15 +69,23 @@ export default function Auth({ mode, onSuccess }) {
     if (!googleClientId || !googleButtonRef.current) return undefined;
 
     let active = true;
+    const handleGoogleCredential = (credential) => {
+      if (active) void googleCredentialHandler.current?.(credential);
+    };
+    activeGoogleCredentialHandler = handleGoogleCredential;
+
     const renderGoogleButton = () => {
       const identity = window.google?.accounts?.id;
       if (!active || !identity || !googleButtonRef.current) return;
-      identity.initialize({
-        client_id: googleClientId,
-        callback: ({ credential }) => {
-          if (credential) void googleCredentialHandler.current(credential);
-        },
-      });
+      if (!googleIdentityInitialized) {
+        identity.initialize({
+          client_id: googleClientId,
+          callback: ({ credential }) => {
+            if (credential) activeGoogleCredentialHandler?.(credential);
+          },
+        });
+        googleIdentityInitialized = true;
+      }
       googleButtonRef.current.replaceChildren();
       identity.renderButton(googleButtonRef.current, {
         theme: "outline",
@@ -98,6 +109,9 @@ export default function Auth({ mode, onSuccess }) {
 
     return () => {
       active = false;
+      if (activeGoogleCredentialHandler === handleGoogleCredential) {
+        activeGoogleCredentialHandler = null;
+      }
       script.removeEventListener("load", renderGoogleButton);
     };
   }, [googleClientId, isRegister]);

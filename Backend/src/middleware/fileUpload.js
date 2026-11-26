@@ -71,7 +71,7 @@ function createFileReceiver(allowReason) {
 
       upload(req, res, (error) => {
         if (error) return uploadErrorResponse(error, req, res, next);
-        if (!req.file) return res.status(400).json({ message: "Choose a file to upload." });
+        if (!req.file) return res.status(400).json({ message: "No file was received. Please choose or drop a file to register." });
         if (allowReason && Object.keys(req.body || {}).some((key) => key !== "reason")) {
           return removeStoredFile(req.file.filename)
             .then(() => res.status(400).json({ message: "Only a verification reason may accompany the file." }))

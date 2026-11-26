@@ -25,6 +25,9 @@ test("upload middleware validates policy and stores files under generated names"
   app.post("/empty", receiveFile, (req, res) => {
     res.status(201).json({ size: req.file.size });
   });
+  app.post("/missing", receiveFile, (req, res) => {
+    res.status(201).json({ uploaded: true });
+  });
   const server = app.listen(0, "127.0.0.1");
   context.after(async () => {
     SystemSetting.findOne = originalFindOne;
@@ -53,6 +56,10 @@ test("upload middleware validates policy and stores files under generated names"
   const emptyResponse = await fetch(url.replace("/upload", "/empty"), { method: "POST", body: emptyUpload });
   assert.equal(emptyResponse.status, 201);
   assert.deepEqual(await emptyResponse.json(), { size: 0 });
+
+  const missingResponse = await fetch(url.replace("/upload", "/missing"), { method: "POST", body: new FormData() });
+  assert.equal(missingResponse.status, 400);
+  assert.match((await missingResponse.json()).message, /No file was received.*file to register/);
 
   const disallowedUpload = new FormData();
   disallowedUpload.append("file", new Blob(["data"]), "payload.exe");

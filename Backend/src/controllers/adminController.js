@@ -46,7 +46,7 @@ async function getOverview(req, res, next) {
       User.countDocuments({ role: "superadmin" }),
       FileRecord.countDocuments(),
       FileRecord.countDocuments({ latestStatus: "modified" }),
-      FileRecord.countDocuments({ securityStatus: { $in: ["corrupted", "modified", "malicious", "inconclusive", "infected", "scan_unavailable"] } }),
+      FileRecord.countDocuments({ securityStatus: { $in: ["corrupted", "modified", "malicious", "harmful", "inconclusive", "infected", "scan_unavailable"] } }),
       ActivityLog.countDocuments({ event: "file.verified" }),
       ActivityLog.countDocuments({ event: "file.modified" }),
       SecurityIncident.countDocuments({ status: { $ne: "resolved" } }),
@@ -270,6 +270,9 @@ async function listScanHistory(req, res, next) {
         malwareStatus: scan.malwareStatus,
         malwareMessage: scan.malwareMessage,
         malwareSignature: scan.malwareSignature,
+        contentStatus: scan.contentStatus,
+        contentMessage: scan.contentMessage,
+        contentCategories: scan.contentCategories,
         integrityStatus: scan.integrityStatus,
         date: scan.createdAt.toISOString(),
       })),
@@ -304,7 +307,7 @@ async function verifyStoredFile(req, res, next) {
     file.latestStatus = result;
     file.verificationCount += 1;
     if (result === "modified") {
-      if (!["malicious", "infected", "corrupted"].includes(file.securityStatus)) file.securityStatus = "modified";
+      if (!["malicious", "harmful", "infected", "corrupted"].includes(file.securityStatus)) file.securityStatus = "modified";
       file.integrityStatus = "mismatched";
     } else if (file.securityStatus === "modified") {
       file.integrityStatus = "matched";

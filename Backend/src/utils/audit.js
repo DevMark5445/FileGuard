@@ -14,9 +14,11 @@ async function recordActivity(req, entry) {
     userAgent: req.get("user-agent") || "",
   });
 
-  const maliciousDetection = entry.details?.securityStatus === "malicious" ||
-    entry.details?.malwareStatus === "infected";
-  const flaggedVerification = entry.event === "file.verified" && maliciousDetection;
+  const flaggedDetection = entry.details?.securityStatus === "malicious" ||
+    entry.details?.securityStatus === "harmful" ||
+    entry.details?.malwareStatus === "infected" ||
+    entry.details?.contentStatus === "flagged";
+  const flaggedVerification = entry.event === "file.verified" && flaggedDetection;
   const alertEvent = ["file.modified", "file.scan.flagged", "auth.login.failed", "auth.mfa.failed"].includes(entry.event);
   if (alertEvent || flaggedVerification) {
     await SecurityAlert.create({
@@ -44,8 +46,10 @@ async function recordActivity(req, entry) {
       requireTLS: port !== 465,
       auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASSWORD },
     });
-    const summary = entry.event === "file.scan.flagged" || maliciousDetection
-      ? `FileGuard flagged ${entry.details?.fileName || "an uploaded file"} for review after a security check. Review the scan history and security alerts.`
+    const summary = entry.details?.contentStatus === "flagged"
+      ? `FileGuard identified potentially harmful image content in ${entry.details?.fileName || "an uploaded image"} (${(entry.details?.contentCategories || []).join(", ")}). Review the scan history and security alerts.`
+      : entry.event === "file.scan.flagged" || flaggedDetection
+        ? `FileGuard flagged ${entry.details?.fileName || "an uploaded file"} for review after a security check. Review the scan history and security alerts.`
       : entry.details?.fileName
         ? `A file integrity check detected a change to ${entry.details.fileName}. A hash mismatch indicates changed content, not necessarily an attack.`
         : `FileGuard recorded a security event: ${entry.event}.`;

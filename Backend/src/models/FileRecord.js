@@ -9,7 +9,7 @@ const fileRecordSchema = new mongoose.Schema(
     owner: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true, index: true },
     securityStatus: {
       type: String,
-      enum: ["not_scanned", "healthy", "corrupted", "modified", "malicious", "inconclusive", "infected", "scan_unavailable"],
+      enum: ["not_scanned", "healthy", "corrupted", "modified", "malicious", "harmful", "inconclusive", "infected", "scan_unavailable"],
       default: "not_scanned",
       index: true,
     },
@@ -18,6 +18,9 @@ const fileRecordSchema = new mongoose.Schema(
     malwareStatus: { type: String, enum: ["clean", "infected", "unavailable", "not_scanned"], default: "not_scanned" },
     malwareMessage: { type: String, maxlength: 500, default: "" },
     malwareSignature: { type: String, maxlength: 160, default: "" },
+    contentStatus: { type: String, enum: ["clean", "flagged", "unavailable", "not_applicable", "not_scanned"], default: "not_scanned" },
+    contentMessage: { type: String, maxlength: 500, default: "" },
+    contentCategories: { type: [String], enum: ["Hate", "SelfHarm", "Sexual", "Violence"], default: [] },
     integrityStatus: { type: String, enum: ["matched", "mismatched", "not_registered", "not_checked"], default: "not_checked" },
     latestStatus: {
       type: String,

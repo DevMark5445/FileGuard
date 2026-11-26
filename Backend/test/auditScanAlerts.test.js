@@ -27,12 +27,18 @@ test("scan alerts are created for confirmed malware, not inconclusive checks", a
       severity: "high",
       details: { fileName: "malware.exe", securityStatus: "malicious", malwareStatus: "infected" },
     });
+    await recordActivity(req, {
+      event: "file.verified",
+      severity: "warning",
+      details: { fileName: "picture.png", securityStatus: "harmful", contentStatus: "flagged", contentCategories: ["Sexual"] },
+    });
   } finally {
     ActivityLog.create = originalActivityCreate;
     SecurityAlert.create = originalAlertCreate;
   }
 
-  assert.equal(alerts.length, 1);
+  assert.equal(alerts.length, 2);
   assert.equal(alerts[0].severity, "high");
   assert.equal(alerts[0].sourceActivity, "activity-2");
+  assert.equal(alerts[1].sourceActivity, "activity-3");
 });

@@ -32,9 +32,18 @@ create an `admin` or assign the admin role.
    system level and include it in backups as appropriate.
 7. Install ClamAV on the API host and keep its virus definitions current.
    FileGuard runs `clamscan` locally for every uploaded file. Set
-   `CLAMSCAN_PATH` to the executable path if it is not on `PATH`. If ClamAV
-   cannot run, the upload is retained and its malware result is reported as
-   unavailable; the overall security status is inconclusive, never clean.
+   `CLAMSCAN_PATH` to the executable path if it is not on `PATH`, and
+   `CLAMAV_DATABASE_DIR` to the directory containing ClamAV's downloaded
+   signature databases. Configure `freshclam` to update that same directory.
+   If ClamAV cannot run or has no usable signatures, the upload is retained
+   and its malware result is reported as unavailable; the overall security
+   status is inconclusive, never clean.
+8. To analyze image content, configure `AZURE_CONTENT_SAFETY_ENDPOINT` and
+   `AZURE_CONTENT_SAFETY_KEY` for an Azure AI Content Safety resource. JPEG,
+   PNG, GIF, and BMP uploads are sent to Azure for analysis of hate, self-harm,
+   sexual, and violence categories. Images larger than 4 MB, or images scanned
+   without Azure configuration, are reported as inconclusive. Uploaded image
+   bytes leave the API host for this hosted analysis.
 
 Example local development values (replace the JWT secret and account details):
 
@@ -54,6 +63,10 @@ SMTP_PASSWORD=
 SMTP_FROM=
 # Optional if clamscan is not on PATH; use the local ClamAV executable path
 CLAMSCAN_PATH=clamscan
+CLAMAV_DATABASE_DIR=
+# Optional hosted image moderation; image bytes are sent to Azure AI Content Safety
+AZURE_CONTENT_SAFETY_ENDPOINT=
+AZURE_CONTENT_SAFETY_KEY=
 ```
 
 The super-admin is created on first startup when its configured email is not
@@ -129,7 +142,16 @@ a baseline through `POST /upload`, which accepts one multipart file in the
 `file` field, validates its extension and size, and checks PDF, DOCX, XLSX,
 TXT, JPG/JPEG, PNG, and ZIP structures. Other permitted extensions are marked
 as structurally unsupported, not as structurally validated. The API scans each
-upload with local ClamAV before calculating its server-side SHA-256. Structural
+upload with local ClamAV before calculating its server-side SHA-256. When
+Azure AI Content Safety is configured, JPEG, PNG, GIF, and BMP uploads also
+receive an image-content scan for hate, self-harm, sexual, and violence
+categories; flagged categories are shown as potentially harmful content, not
+as malware. Azure's image limit is 4 MB. If the hosted scan is not configured
+or cannot complete, the image-content result is unavailable and the overall
+security status is inconclusive. Image bytes are sent to Azure for moderation.
+Moderation is probabilistic and can miss harmful content or flag benign images;
+a clean result is not a guarantee of safety.
+Structural
 validation is capped at 100 MB per file and ZIP expansion at 100 MB. Files that
 exceed those safety limits are retained but their structural result is
 inconclusive. The oldest file with the same owner and name remains the original

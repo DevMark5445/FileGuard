@@ -8,7 +8,7 @@ const scanResultSchema = new mongoose.Schema(
     fileHash: { type: String, required: true, match: /^[a-f\d]{64}$/i },
     securityStatus: {
       type: String,
-      enum: ["healthy", "corrupted", "modified", "malicious", "inconclusive"],
+      enum: ["healthy", "corrupted", "modified", "malicious", "harmful", "inconclusive"],
       required: true,
       index: true,
     },
@@ -17,6 +17,9 @@ const scanResultSchema = new mongoose.Schema(
     malwareStatus: { type: String, enum: ["clean", "infected", "unavailable"], required: true },
     malwareMessage: { type: String, required: true, maxlength: 500 },
     malwareSignature: { type: String, maxlength: 160, default: "" },
+    contentStatus: { type: String, enum: ["clean", "flagged", "unavailable", "not_applicable"], default: "not_applicable" },
+    contentMessage: { type: String, maxlength: 500, default: "" },
+    contentCategories: { type: [String], enum: ["Hate", "SelfHarm", "Sexual", "Violence"], default: [] },
     integrityStatus: { type: String, enum: ["matched", "mismatched", "not_registered"], required: true },
     baselineHash: { type: String, match: /^[a-f\d]{64}$/i, default: null },
   },

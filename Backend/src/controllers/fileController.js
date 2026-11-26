@@ -10,6 +10,7 @@ const { getStoredFilePath, removeStoredFile } = require("../utils/fileStorage");
 const { hashFile } = require("../services/hashService");
 const { validateFileStructure } = require("../services/corruptionService");
 const { scanFile } = require("../services/malwareScanner");
+const { scanImageContent } = require("../services/imageContentScanner");
 
 const MAX_TEXT_DIFF_BYTES = 2 * 1024 * 1024;
 const MAX_DIFF_LINES = 1000;
@@ -19,15 +20,17 @@ async function inspectIncomingFile(req) {
   const filePath = getStoredFilePath(req.file.filename);
   const structure = await validateFileStructure(filePath, req.uploadOriginalName);
   const malware = await scanFile(filePath);
+  const content = await scanImageContent(filePath, req.uploadOriginalName);
   const hash = await hashFile(filePath);
-  return { structure, malware, hash };
+  return { structure, malware, content, hash };
 }
 
-function assessedStatus(structure, malware, integrityStatus) {
+function assessedStatus(structure, malware, content, integrityStatus) {
   if (malware.status === "infected") return "malicious";
+  if (content.status === "flagged") return "harmful";
   if (structure.status === "invalid") return "corrupted";
   if (integrityStatus === "mismatched") return "modified";
-  if (malware.status !== "clean" || structure.status !== "valid") return "inconclusive";
+  if (malware.status !== "clean" || content.status === "unavailable" || structure.status !== "valid") return "inconclusive";
   return "healthy";
 }
 
@@ -43,6 +46,7 @@ async function saveScanResult(req, {
   securityStatus,
   structure,
   malware,
+  content,
   integrityStatus,
   baselineHash = null,
 }) {
@@ -57,6 +61,9 @@ async function saveScanResult(req, {
     malwareStatus: malware.status,
     malwareMessage: malware.message,
     malwareSignature: malware.signature || "",
+    contentStatus: content.status,
+    contentMessage: content.message,
+    contentCategories: content.categories,
     integrityStatus,
     baselineHash,
   });
@@ -80,6 +87,9 @@ function formatFile(file) {
     malwareStatus: file.malwareStatus || "not_scanned",
     malwareMessage: file.malwareMessage || "",
     malwareSignature: file.malwareSignature || "",
+    contentStatus: file.contentStatus || "not_scanned",
+    contentMessage: file.contentMessage || "",
+    contentCategories: file.contentCategories || [],
     integrityStatus: file.integrityStatus || "not_checked",
     owner: file.owner && file.owner.name
       ? { id: file.owner.id, name: file.owner.name, email: file.owner.email }
@@ -245,7 +255,7 @@ async function uploadFile(req, res, next) {
   }
 
   const integrityStatus = baseline ? (baseline.hash === inspection.hash ? "matched" : "mismatched") : "not_registered";
-  const securityStatus = assessedStatus(inspection.structure, inspection.malware, integrityStatus);
+  const securityStatus = assessedStatus(inspection.structure, inspection.malware, inspection.content, integrityStatus);
   const result = integrityStatus === "mismatched" ? "modified" : baseline ? "intact" : "registered";
   let file;
   try {
@@ -261,6 +271,9 @@ async function uploadFile(req, res, next) {
       malwareStatus: inspection.malware.status,
       malwareMessage: inspection.malware.message,
       malwareSignature: inspection.malware.signature || "",
+      contentStatus: inspection.content.status,
+      contentMessage: inspection.content.message,
+      contentCategories: inspection.content.categories,
       integrityStatus,
       latestStatus: result,
       verificationCount: baseline ? 1 : 0,
@@ -278,6 +291,7 @@ async function uploadFile(req, res, next) {
       securityStatus,
       structure: inspection.structure,
       malware: inspection.malware,
+      content: inspection.content,
       integrityStatus,
       baselineHash: baseline?.hash || null,
     });
@@ -288,10 +302,10 @@ async function uploadFile(req, res, next) {
 
   try {
     await recordActivity(req, {
-      event: securityStatus === "malicious" ? "file.scan.flagged"
+      event: ["malicious", "harmful"].includes(securityStatus) ? "file.scan.flagged"
         : integrityStatus === "mismatched" ? "file.modified"
           : securityStatus === "healthy" ? "file.registered" : "file.scan.completed",
-      severity: securityStatus === "malicious" ? "high" : integrityStatus === "mismatched" ? "warning" : "info",
+      severity: ["malicious", "harmful"].includes(securityStatus) ? "high" : integrityStatus === "mismatched" ? "warning" : "info",
       targetUserId: file.owner,
       targetFileId: file.id,
       details: {
@@ -303,12 +317,16 @@ async function uploadFile(req, res, next) {
         structureStatus: inspection.structure.status,
         malwareStatus: inspection.malware.status,
         malwareSignature: inspection.malware.signature || "",
+        contentStatus: inspection.content.status,
+        contentMessage: inspection.content.message,
+        contentCategories: inspection.content.categories,
         integrityStatus,
         baselineHash: baseline?.hash || null,
         hash: inspection.hash,
         structureMessage: inspection.structure.message,
         malwareMessage: inspection.malware.message,
         scanNotice: securityStatus === "malicious" ? "A known malware signature was detected."
+          : securityStatus === "harmful" ? inspection.content.message
           : securityStatus === "corrupted" ? "The file structure is invalid."
             : securityStatus === "modified" ? "The file differs from its original SHA-256 baseline."
               : securityStatus === "inconclusive" ? "One or more checks could not fully assess this file."
@@ -325,6 +343,9 @@ async function uploadFile(req, res, next) {
         malwareStatus: inspection.malware.status,
         malwareMessage: inspection.malware.message,
         malwareSignature: inspection.malware.signature || "",
+        contentStatus: inspection.content.status,
+        contentMessage: inspection.content.message,
+        contentCategories: inspection.content.categories,
         integrityStatus,
       },
     });
@@ -426,7 +447,7 @@ async function verifyFile(req, res, next) {
     const newHash = inspection.hash;
     const result = newHash === baselineHash ? "intact" : "modified";
     const integrityStatus = result === "modified" ? "mismatched" : "matched";
-    const securityStatus = assessedStatus(inspection.structure, inspection.malware, integrityStatus);
+    const securityStatus = assessedStatus(inspection.structure, inspection.malware, inspection.content, integrityStatus);
     const diff = result === "modified" && baseline?.storageKey
       ? await getTextDiff(
         getStoredFilePath(baseline.storageKey),
@@ -446,6 +467,9 @@ async function verifyFile(req, res, next) {
     file.malwareStatus = inspection.malware.status;
     file.malwareMessage = inspection.malware.message;
     file.malwareSignature = inspection.malware.signature || "";
+    file.contentStatus = inspection.content.status;
+    file.contentMessage = inspection.content.message;
+    file.contentCategories = inspection.content.categories;
     file.integrityStatus = integrityStatus;
     await file.save();
     await saveScanResult(req, {
@@ -455,6 +479,7 @@ async function verifyFile(req, res, next) {
       securityStatus,
       structure: inspection.structure,
       malware: inspection.malware,
+      content: inspection.content,
       integrityStatus,
       baselineHash,
     });
@@ -472,6 +497,9 @@ async function verifyFile(req, res, next) {
         structureStatus: inspection.structure.status,
         malwareStatus: inspection.malware.status,
         malwareSignature: inspection.malware.signature || "",
+        contentStatus: inspection.content.status,
+        contentMessage: inspection.content.message,
+        contentCategories: inspection.content.categories,
         integrityStatus,
       },
       ...(result === "modified" ? {
@@ -494,6 +522,9 @@ async function verifyFile(req, res, next) {
         securityStatus,
         structureStatus: inspection.structure.status,
         malwareStatus: inspection.malware.status,
+        contentStatus: inspection.content.status,
+        contentMessage: inspection.content.message,
+        contentCategories: inspection.content.categories,
         integrityStatus,
         ...(diff ? { diff } : {}),
         changedCopyAvailable: result === "modified",
@@ -534,7 +565,7 @@ async function adminVerifyFile(req, res, next) {
     const newHash = inspection.hash;
     const result = newHash === baselineHash ? "intact" : "modified";
     const integrityStatus = result === "modified" ? "mismatched" : "matched";
-    const securityStatus = assessedStatus(inspection.structure, inspection.malware, integrityStatus);
+    const securityStatus = assessedStatus(inspection.structure, inspection.malware, inspection.content, integrityStatus);
     const diff = result === "modified" && baseline?.storageKey
       ? await getTextDiff(getStoredFilePath(baseline.storageKey), getStoredFilePath(req.file.filename))
       : result === "modified"
@@ -551,6 +582,9 @@ async function adminVerifyFile(req, res, next) {
     file.malwareStatus = inspection.malware.status;
     file.malwareMessage = inspection.malware.message;
     file.malwareSignature = inspection.malware.signature || "";
+    file.contentStatus = inspection.content.status;
+    file.contentMessage = inspection.content.message;
+    file.contentCategories = inspection.content.categories;
     file.integrityStatus = integrityStatus;
     await file.save();
     await saveScanResult(req, {
@@ -560,6 +594,7 @@ async function adminVerifyFile(req, res, next) {
       securityStatus,
       structure: inspection.structure,
       malware: inspection.malware,
+      content: inspection.content,
       integrityStatus,
       baselineHash,
     });
@@ -581,6 +616,9 @@ async function adminVerifyFile(req, res, next) {
         structureStatus: inspection.structure.status,
         malwareStatus: inspection.malware.status,
         malwareSignature: inspection.malware.signature || "",
+        contentStatus: inspection.content.status,
+        contentMessage: inspection.content.message,
+        contentCategories: inspection.content.categories,
         integrityStatus,
         performedByRole: req.user.role,
         authorizedReason: reason.trim(),
@@ -601,6 +639,9 @@ async function adminVerifyFile(req, res, next) {
         structureStatus: inspection.structure.status,
         malwareStatus: inspection.malware.status,
         malwareSignature: inspection.malware.signature || "",
+        contentStatus: inspection.content.status,
+        contentMessage: inspection.content.message,
+        contentCategories: inspection.content.categories,
         integrityStatus,
         ...(diff ? { diff } : {}),
         changedCopyAvailable: result === "modified",
@@ -641,6 +682,9 @@ async function getHistory(req, res, next) {
         securityStatus: log.details.securityStatus,
         structureStatus: log.details.structureStatus,
         malwareStatus: log.details.malwareStatus,
+        contentStatus: log.details.contentStatus,
+        contentMessage: log.details.contentMessage,
+        contentCategories: log.details.contentCategories || [],
         integrityStatus: log.details.integrityStatus,
         reviewed: Boolean(log.details.reviewed),
         storedHash: log.details.storedHash || log.details.baselineHash,

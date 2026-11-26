@@ -29,6 +29,9 @@ test("uploads retain scan findings, report unavailable scans as inconclusive, an
   const storageDirectory = await fs.mkdtemp(path.join(os.tmpdir(), "fileguard-upload-scan-"));
   const previousStorageDirectory = process.env.FILE_STORAGE_DIR;
   const previousScanner = process.env.CLAMSCAN_PATH;
+  const previousImageEndpoint = process.env.AZURE_CONTENT_SAFETY_ENDPOINT;
+  const previousImageKey = process.env.AZURE_CONTENT_SAFETY_KEY;
+  const originalFetch = global.fetch;
   const smtpKeys = ["SMTP_HOST", "SMTP_PORT", "SMTP_USER", "SMTP_PASSWORD", "SMTP_FROM"];
   const previousSmtpValues = Object.fromEntries(smtpKeys.map((key) => [key, process.env[key]]));
   const originals = {
@@ -88,6 +91,11 @@ test("uploads retain scan findings, report unavailable scans as inconclusive, an
     else process.env.FILE_STORAGE_DIR = previousStorageDirectory;
     if (previousScanner === undefined) delete process.env.CLAMSCAN_PATH;
     else process.env.CLAMSCAN_PATH = previousScanner;
+    if (previousImageEndpoint === undefined) delete process.env.AZURE_CONTENT_SAFETY_ENDPOINT;
+    else process.env.AZURE_CONTENT_SAFETY_ENDPOINT = previousImageEndpoint;
+    if (previousImageKey === undefined) delete process.env.AZURE_CONTENT_SAFETY_KEY;
+    else process.env.AZURE_CONTENT_SAFETY_KEY = previousImageKey;
+    global.fetch = originalFetch;
     smtpKeys.forEach((key) => {
       if (previousSmtpValues[key] === undefined) delete process.env[key];
       else process.env[key] = previousSmtpValues[key];
@@ -137,6 +145,27 @@ test("uploads retain scan findings, report unavailable scans as inconclusive, an
   assert.equal(securityAlertsCreated, 2, "only hash mismatches have raised alerts so far");
   assert.equal(await fs.readFile(path.join(storageDirectory, "fe7eec2b-e491-4d84-8dc0-098935ca807f"), "utf8"), "valid UTF-8 text");
 
+  process.env.AZURE_CONTENT_SAFETY_ENDPOINT = "https://example.test";
+  process.env.AZURE_CONTENT_SAFETY_KEY = "test-key";
+  global.fetch = async () => ({
+    ok: true,
+    json: async () => ({
+      categoriesAnalysis: [
+        { category: "Hate", severity: 0 },
+        { category: "SelfHarm", severity: 0 },
+        { category: "Sexual", severity: 4 },
+        { category: "Violence", severity: 0 },
+      ],
+    }),
+  });
+  const image = await upload("picture.png", "test image", "aef28594-2cde-4e27-b6da-4a2ae3aac393");
+  assert.equal(image.body.file.securityStatus, "harmful");
+  assert.equal(image.body.file.contentStatus, "flagged");
+  assert.deepEqual(image.body.scan.contentCategories, ["Sexual"]);
+  assert.equal(scanEntries[3].contentStatus, "flagged");
+  assert.equal(activityEntries[3].event, "file.scan.flagged");
+  assert.equal(securityAlertsCreated, 3, "harmful image content creates a security alert");
+
   const verificationKey = "a61ce19e-3852-4e31-b3da-4a2ae3aac393";
   await fs.writeFile(path.join(storageDirectory, verificationKey), secondPdf);
   const verificationRequest = {
@@ -153,6 +182,6 @@ test("uploads retain scan findings, report unavailable scans as inconclusive, an
   assert.equal(verificationResponse.body.log.storedHash, baseline.hash);
   assert.equal(verificationResponse.body.log.newHash, crypto.createHash("sha256").update(secondPdf).digest("hex"));
   assert.equal(verificationResponse.body.log.integrityStatus, "mismatched");
-  assert.equal(scanEntries[3].baselineHash, baseline.hash);
+  assert.equal(scanEntries[4].baselineHash, baseline.hash);
   assert.equal(await fs.readFile(path.join(storageDirectory, verificationKey), "utf8"), secondPdf);
 });

@@ -12,13 +12,13 @@ export default function Dashboard() {
   if (error) return <ErrorText>{error}</ErrorText>;
   const mod = logs.filter((l) => l.result === "modified");
   const open = logs.filter((l) => !l.reviewed &&
-    (l.result === "modified" || l.securityStatus === "malicious")).length;
+    (l.result === "modified" || ["malicious", "harmful"].includes(l.securityStatus))).length;
   return (
     <>
       <PageHead title="Dashboard" sub="The state of your registered files." />
       {open > 0 && (
         <div role="alert" className="result bad dashboard-alert">
-          <h3 className="font-semibold">{open} modified file{open > 1 ? "s" : ""} need your attention</h3>
+          <h3 className="font-semibold">{open} file{open > 1 ? "s need" : " needs"} your attention</h3>
           <Link to="/history" className="underline">Review alerts</Link>
         </div>
       )}

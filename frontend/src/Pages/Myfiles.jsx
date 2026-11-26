@@ -9,6 +9,7 @@ function securityLabel(status) {
   return ({
     healthy: "PASSED AVAILABLE CHECKS",
     corrupted: "INVALID STRUCTURE",
+    harmful: "POTENTIALLY HARMFUL IMAGE CONTENT",
     malicious: "KNOWN MALWARE SIGNATURE DETECTED",
     infected: "KNOWN MALWARE SIGNATURE DETECTED",
     inconclusive: "SCAN INCOMPLETE — NO VERDICT",
@@ -27,13 +28,15 @@ export default function MyFiles() {
   const { data: policy } = useLoad(api.getFilePolicy, { maximumFileSize: 50 * 1024 * 1024 });
   const toast = useToast();
   const [err, setErr] = useState("");
+  const [warning, setWarning] = useState("");
   const [busy, setBusy] = useState(false);
   const [over, setOver] = useState(false);
   const [scanNotice, setScanNotice] = useState(null);
   const [scanProgress, setScanProgress] = useState(null);
   const [deletingId, setDeletingId] = useState("");
 
-  const add = async (list) => {
+  const add = async (list, containsDirectory = false) => {
+    setWarning(containsDirectory ? "That item is a folder, not a file. Please choose or drop files only." : "");
     if (!list.length) return;
     setErr(""); setScanNotice(null); setBusy(true);
     let healthy = 0; const flagged = []; const errs = [];
@@ -49,7 +52,10 @@ export default function MyFiles() {
             status: record.securityStatus,
             structureStatus: record.scan?.structureStatus,
             malwareStatus: record.scan?.malwareStatus,
+            contentStatus: record.scan?.contentStatus,
+            contentCategories: record.scan?.contentCategories,
             integrityStatus: record.scan?.integrityStatus,
+            contentMessage: record.scan?.contentMessage,
             message: [record.scan?.structureMessage, record.scan?.malwareMessage].filter(Boolean).join(" "),
           });
         } catch (x) { errs.push(errMsg(x)); }
@@ -61,8 +67,11 @@ export default function MyFiles() {
     setErr(errs.join(" "));
     setScanNotice({ healthy, flagged });
     const threats = flagged.filter((item) => item.status === "malicious" || item.status === "infected").length;
+    const harmfulImages = flagged.filter((item) => item.contentStatus === "flagged").length;
     if (threats) {
       toast(`${threats} file${threats === 1 ? " was" : "s were"} flagged with a known malware signature.`, "error");
+    } else if (harmfulImages) {
+      toast(`${harmfulImages} image${harmfulImages === 1 ? " was" : "s were"} flagged for potentially harmful content.`, "warning");
     } else if (flagged.length) {
       toast(`${flagged.length} file${flagged.length === 1 ? " needs" : "s need"} review; see the scan results below.`, "warning");
     } else if (healthy) {
@@ -98,13 +107,15 @@ export default function MyFiles() {
     }
   };
   const detectedThreats = scanNotice?.flagged.filter((item) => item.status === "malicious" || item.status === "infected") || [];
-  const otherResults = scanNotice?.flagged.filter((item) => item.status !== "malicious" && item.status !== "infected") || [];
+  const detectedHarmfulImages = scanNotice?.flagged.filter((item) => item.contentStatus === "flagged") || [];
+  const otherResults = scanNotice?.flagged.filter((item) =>
+    item.status !== "malicious" && item.status !== "infected" && item.contentStatus !== "flagged") || [];
 
   return (
     <>
-      <PageHead title="My files" sub="Uploads are checked for supported file structures, compared with the original SHA-256 baseline, and scanned for known malware signatures. Results are reported without blocking access." />
+      <PageHead title="My files" sub="Uploads are checked for supported file structures, compared with the original SHA-256 baseline, and scanned for known malware signatures. Configured image moderation also checks pictures for harmful content. Results are reported without blocking access." />
       <Panel>
-        <p className="sub">A clean signature scan cannot prove a file is harmless. FileGuard does not run files in a behavioral sandbox and cannot reliably detect every attempt to steal data, change files, encrypt content, install software, contact servers, or exploit vulnerabilities. Unsupported formats or unavailable scanners are reported as inconclusive.</p>
+        <p className="sub">A clean malware scan or image-content analysis cannot prove a file is harmless or identify every harmful image. FileGuard does not run files in a behavioral sandbox. Unsupported formats or unavailable scanners are reported as inconclusive.</p>
         {busy && scanProgress && <div className="scan-progress" role="status" aria-live="polite" aria-busy="true">
           <span className="scan-spinner" aria-hidden="true" />
           <span>Scanning file {scanProgress.index} of {scanProgress.total}: <strong>{scanProgress.name}</strong>. Please wait…</span>
@@ -112,23 +123,36 @@ export default function MyFiles() {
         <label
           onDragOver={(e) => { e.preventDefault(); setOver(true); }}
           onDragLeave={() => setOver(false)}
-          onDrop={(e) => { e.preventDefault(); setOver(false); if (!busy) add([...e.dataTransfer.files]); }}
+          onDrop={(e) => {
+            e.preventDefault();
+            setOver(false);
+            if (!busy) {
+              const containsDirectory = [...(e.dataTransfer.items || [])].some((item) => item.webkitGetAsEntry?.()?.isDirectory);
+              add([...e.dataTransfer.files], containsDirectory);
+            }
+          }}
           className={`drop${over ? " over" : ""}`}
         >
           <input type="file" multiple disabled={busy} onChange={(e) => { add([...e.target.files]); e.target.value = ""; }} />
           <b>{busy ? "Registering…" : "Choose files to register"}</b><br /><span className="hs">or drop them here</span>
         </label>
+        {warning && <p role="alert" className="result neutral">{warning}</p>}
         <FormError>{err}</FormError>
         {detectedThreats.length > 0 && <div role="alert" className="result bad">
           <strong>SECURITY WARNING — KNOWN MALWARE SIGNATURE DETECTED</strong>
           <p>Do not open or execute these files. A security alert is available to administrators.</p>
           <ul>{detectedThreats.map((item, index) => <li key={`${item.name}-${index}`}>{item.name}: {item.message}</li>)}</ul>
         </div>}
+        {detectedHarmfulImages.length > 0 && <div role="alert" className="result bad">
+          <strong>CONTENT WARNING — POTENTIALLY HARMFUL IMAGE CONTENT</strong>
+          <p>Image moderation found content that may be harmful. Review before viewing or sharing these images.</p>
+          <ul>{detectedHarmfulImages.map((item, index) => <li key={`${item.name}-${index}`}>{item.name}: {item.contentMessage}</li>)}</ul>
+        </div>}
         {otherResults.length > 0 && <div role="status" className="result neutral">
           <strong>Scan results</strong>
           <p>An incomplete scan or a file change alone is not evidence of malware. Results for each available check are listed below.</p>
           <ul>{otherResults.map((item, index) => <li key={`${item.name}-${index}`}>
-            {item.name}: {securityLabel(item.status)}. Integrity: {item.integrityStatus || "not checked"}; structure: {item.structureStatus || "not checked"}; malware scan: {item.malwareStatus || "not checked"}. {item.message}
+            {item.name}: {securityLabel(item.status)}. Integrity: {item.integrityStatus || "not checked"}; structure: {item.structureStatus || "not checked"}; malware scan: {item.malwareStatus || "not checked"}; image content: {item.contentStatus || "not checked"}. {item.message} {item.contentMessage}
           </li>)}</ul>
         </div>}
         {scanNotice?.healthy > 0 && <p role="status" className="result ok">{scanNotice.healthy} file{scanNotice.healthy === 1 ? "" : "s"} passed the available checks.</p>}
@@ -142,8 +166,8 @@ export default function MyFiles() {
                 <Td className="font-mono text-xs text-mute"><span title={f.hash}>{f.hash.slice(0, 16)}…{f.hash.slice(-8)}</span></Td>
                 <Td>
                   <span className={`pill ${f.securityStatus === "healthy" ? "ok" : ["inconclusive", "scan_unavailable"].includes(f.securityStatus) ? "" : "bad"}`}>{securityLabel(f.securityStatus)}</span>
-                  <br /><span className="hs">{statusLabel(f.structureStatus)} structure · {statusLabel(f.malwareStatus)} malware · {statusLabel(f.integrityStatus)} integrity</span>
-                  {(f.structureMessage || f.malwareSignature || f.malwareMessage) && <><br /><span className="hs">{f.structureMessage} {f.malwareSignature || f.malwareMessage}</span></>}
+                  <br /><span className="hs">{statusLabel(f.structureStatus)} structure · {statusLabel(f.malwareStatus)} malware · {statusLabel(f.contentStatus)} image content · {statusLabel(f.integrityStatus)} integrity</span>
+                  {(f.structureMessage || f.malwareSignature || f.malwareMessage || f.contentMessage) && <><br /><span className="hs">{f.structureMessage} {f.malwareSignature || f.malwareMessage} {f.contentMessage}</span></>}
                 </Td>
                 <Td>{fmtDate(f.date)}</Td>
                 <Td className="whitespace-nowrap"><SmallBtn disabled={!f.hasOriginalCopy} onClick={() => download(f)}>Download</SmallBtn> <SmallBtn onClick={() => copy(f.hash)}>Copy hash</SmallBtn> <SmallBtn disabled={deletingId === f.id} onClick={() => remove(f)}>{deletingId === f.id ? "Deleting…" : "Delete"}</SmallBtn></Td>

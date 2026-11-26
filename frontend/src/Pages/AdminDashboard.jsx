@@ -30,7 +30,7 @@ function eventLabel(event = "") {
 
 function Status({ value }) {
   const tone = ["active", "intact", "resolved", "healthy", "clean", "valid", "matched"].includes(value) ? "ok"
-    : ["suspended", "deactivated", "modified", "malicious", "high", "corrupted", "infected", "invalid"].includes(value) ? "bad" : "n";
+    : ["suspended", "deactivated", "modified", "malicious", "harmful", "flagged", "high", "corrupted", "infected", "invalid"].includes(value) ? "bad" : "n";
   return <span className={`pill ${tone}`}>{(value || "open").replaceAll("_", " ")}</span>;
 }
 
@@ -188,7 +188,8 @@ function Files({ files, total, skip, onPage, allowVerify, verifyingId, onVerify,
                   }}>{verifyingId === file.id ? "Checking…" : "Verify stored copy"}</button>
                   {result && <>
                     <p role="status">Result: <Status value={result.result} /> <Status value={result.securityStatus} /></p>
-                    <p className="hs">Structure: {result.structureStatus || "not checked"} · Malware: {result.malwareStatus || "not checked"} · Integrity: {result.integrityStatus || "not checked"}</p>
+                    <p className="hs">Structure: {result.structureStatus || "not checked"} · Malware: {result.malwareStatus || "not checked"} · Image content: {result.contentStatus || "not checked"} · Integrity: {result.integrityStatus || "not checked"}</p>
+                    {result.contentMessage && <p className="hs">{result.contentMessage}</p>}
                       {result.result === "modified" && result.diff?.available && <>
                         <SmallBtn onClick={() => setShowChanges(!showChanges)}>
                           {showChanges ? "Hide changes" : "View changes"}
@@ -217,15 +218,16 @@ function Files({ files, total, skip, onPage, allowVerify, verifyingId, onVerify,
 function ScanHistory({ scans, total, skip, onPage }) {
   return (
     <Panel title="File security scan history">
-      <p className="sub">Review structure, known-signature malware, and baseline-check results. ClamAV signatures do not provide behavioral sandboxing and cannot establish that a file is harmless.</p>
+      <p className="sub">Review structure, known-signature malware, image-content moderation, and baseline-check results. ClamAV signatures do not provide behavioral sandboxing and cannot establish that a file is harmless.</p>
       {!scans.length ? <Empty>No file scans have been recorded.</Empty> : (
-        <Table head={["File / owner", "Result", "Structure", "Malware", "Integrity", "Scanned"]}>
+        <Table head={["File / owner", "Result", "Structure", "Malware", "Image content", "Integrity", "Scanned"]}>
           {scans.map((scan) => (
             <tr key={scan.id}>
               <Td><strong>{scan.fileName}</strong><br /><span className="hs">{scan.owner?.name || "Deleted account"} · {scan.owner?.email || "—"}</span><br /><span className="hs mono">{scan.fileId || "No registered baseline"}</span></Td>
               <Td><Status value={scan.securityStatus} /></Td>
               <Td><Status value={scan.structureStatus} /><br /><span className="hs">{scan.structureMessage}</span></Td>
               <Td><Status value={scan.malwareStatus} /><br /><span className="hs">{scan.malwareSignature || scan.malwareMessage}</span></Td>
+              <Td><Status value={scan.contentStatus} /><br /><span className="hs">{scan.contentMessage || scan.contentCategories?.join(", ")}</span></Td>
               <Td><Status value={scan.integrityStatus} />{scan.baselineHash && <details><summary>Hashes</summary><span className="hs mono">Baseline: {scan.baselineHash}<br />Checked: {scan.fileHash}</span></details>}</Td>
               <Td>{fmtDate(scan.date)}</Td>
             </tr>
@@ -267,7 +269,7 @@ function AlertList({ alerts, total, skip, onPage, onUpdate }) {
           <div className="incident-title">
             <div>
               <h4>{alert.activity?.details?.fileName || eventLabel(alert.activity?.event)}</h4>
-              <p>{alert.activity?.details?.reason || alert.activity?.details?.structureMessage || alert.activity?.details?.malwareMessage || "FileGuard recorded a security event."}</p>
+              <p>{alert.activity?.details?.reason || alert.activity?.details?.contentMessage || alert.activity?.details?.structureMessage || alert.activity?.details?.malwareMessage || "FileGuard recorded a security event."}</p>
             </div>
             <div><Status value={alert.severity} /> <Status value={alert.status} /></div>
           </div>

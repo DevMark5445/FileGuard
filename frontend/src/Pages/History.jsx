@@ -18,7 +18,7 @@ export default function History() {
   if (loading) return <Spinner />;
   if (error) return <ErrorText>{error}</ErrorText>;
   const open = logs.filter((log) => !log.reviewed &&
-    (log.result === "modified" || log.securityStatus === "malicious"));
+    (log.result === "modified" || ["malicious", "harmful"].includes(log.securityStatus)));
   const review = async (id) => {
     setErr("");
     try { await api.reviewLog(id); reload(); await refreshAlerts(); }
@@ -64,16 +64,17 @@ export default function History() {
       </Panel>
       <Panel title="All verifications">
         {!logs.length ? <Empty>No checks yet. Verify a file to see results here.</Empty> : (
-          <Table head={["File", "Checked", "Integrity", "Security", "Structure", "Malware", "Changed copy"]}>
+          <Table head={["File", "Checked", "Integrity", "Security", "Structure", "Malware", "Image content", "Changed copy"]}>
             {logs.map((log) => (
               <Fragment key={log.id}>
                 <tr>
                   <Td>{log.fileName}</Td>
                   <Td>{fmtDate(log.date)}</Td>
                   <Td><span className={`pill ${log.integrityStatus === "matched" ? "ok" : log.integrityStatus === "mismatched" ? "bad" : "n"}`}>{(log.integrityStatus || log.result).replaceAll("_", " ")}</span></Td>
-                  <Td><span className={`pill ${log.securityStatus === "healthy" ? "ok" : ["malicious", "corrupted", "modified"].includes(log.securityStatus) ? "bad" : ""}`}>{(log.securityStatus || "not checked").replaceAll("_", " ")}</span></Td>
+                  <Td><span className={`pill ${log.securityStatus === "healthy" ? "ok" : ["malicious", "harmful", "corrupted", "modified"].includes(log.securityStatus) ? "bad" : ""}`}>{(log.securityStatus || "not checked").replaceAll("_", " ")}</span></Td>
                   <Td>{(log.structureStatus || "not checked").replaceAll("_", " ")}</Td>
                   <Td>{(log.malwareStatus || "not checked").replaceAll("_", " ")}</Td>
+                  <Td>{(log.contentStatus || "not checked").replaceAll("_", " ")}{log.contentMessage && <><br /><span className="hs">{log.contentMessage}</span></>}</Td>
                   <Td>{log.hasChangedCopy ? (
                     <>
                       <SmallBtn disabled={diffLoading === log.id} onClick={() => viewDiff(log)}>{diffLoading === log.id ? "Loading…" : diffs[log.id] ? "Hide changes" : "View changes"}</SmallBtn>{" "}
@@ -82,7 +83,7 @@ export default function History() {
                     </>
                   ) : "—"}</Td>
                 </tr>
-                {diffs[log.id] && <tr key={`${log.id}-diff`}><Td colSpan="7"><FileDiff diff={diffs[log.id]} /></Td></tr>}
+                {diffs[log.id] && <tr key={`${log.id}-diff`}><Td colSpan="8"><FileDiff diff={diffs[log.id]} /></Td></tr>}
               </Fragment>
             ))}
           </Table>

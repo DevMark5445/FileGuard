@@ -11,8 +11,12 @@ export default function LogTable({ logs }) {
           <Td>{log.fileName}</Td>
           <Td>{fmtDate(log.date)}</Td>
           <Td>
-            <span className={`pill ${log.result === "intact" ? "ok" : "bad"}`}>
-              {log.result === "intact" ? "Unchanged" : "Modified"}
+            <span className={`pill ${log.securityStatus === "healthy" || log.result === "intact" ? "ok" : ["malicious", "harmful", "modified"].includes(log.securityStatus) || log.result === "modified" ? "bad" : ""}`}>
+              {log.securityStatus === "harmful" ? "Potentially harmful content"
+                : log.securityStatus === "malicious" ? "Malware detected"
+                  : log.securityStatus === "inconclusive" ? "Scan inconclusive"
+                    : log.result === "intact" ? "Unchanged"
+                      : log.result === "modified" ? "Modified" : "Scanned"}
             </span>
           </Td>
         </tr>

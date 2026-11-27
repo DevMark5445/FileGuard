@@ -1,4 +1,5 @@
 import { Fragment, useCallback, useEffect, useState } from "react";
+import { useOutletContext } from "react-router-dom";
 import { adminApi } from "../api.js";
 import { Empty, ErrorText, FormError, PageHead, Panel, SmallBtn, Spinner, Stat, Table, Td } from "../components/UI.jsx";
 import { useToast } from "../context/ToastContext.jsx";
@@ -435,6 +436,7 @@ function Reports({ busy, onDownload }) {
 }
 
 export default function SuperAdmin() {
+  const { monitoringVersion } = useOutletContext();
   const toast = useToast();
   const [section, setSection] = useState("overview");
   const [stats, setStats] = useState(emptyStats);
@@ -504,7 +506,7 @@ export default function SuperAdmin() {
       .catch((reason) => { if (active) setError(reason instanceof Error ? reason.message : "Could not load administration data."); })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
-  }, [loadOverview, loadSection]);
+  }, [loadOverview, loadSection, monitoringVersion]);
 
   const refresh = async () => {
     await Promise.all([loadOverview(), loadSection()]);

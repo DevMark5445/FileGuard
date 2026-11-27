@@ -1,4 +1,5 @@
 import { Fragment, useCallback, useEffect, useState } from "react";
+import { useOutletContext } from "react-router-dom";
 import { adminApi } from "../api.js";
 import { profileApi } from "../auth.js";
 import { Empty, ErrorText, PageHead, Panel, SmallBtn, Spinner, Stat, Table, Td } from "../components/UI.jsx";
@@ -436,6 +437,7 @@ function Profile({ user, onUserUpdated, runAction }) {
 }
 
 export default function AdminDashboard({ user, onUserUpdated }) {
+  const { monitoringVersion } = useOutletContext();
   const toast = useToast();
   const [section, setSection] = useState("overview");
   const [stats, setStats] = useState(defaultStats);
@@ -514,7 +516,7 @@ export default function AdminDashboard({ user, onUserUpdated }) {
     }
   }, [loadOverview, loadSection]);
 
-  useEffect(() => { reload(); }, [reload]);
+  useEffect(() => { reload(); }, [reload, monitoringVersion]);
 
   const runAction = async (operation, successMessage) => {
     setBusy(true);

@@ -21,18 +21,23 @@ import { AppSkeleton } from "./components/Skeleton.jsx";
 import AdminDashboard from "./Pages/AdminDashboard.jsx";
 
 function AppLayout({ user, onSignOut }) {
+  const toast = useToast();
   const [alertCount, setAlertCount] = useState(0);
   const [alertError, setAlertError] = useState("");
+  const [monitoringVersion, setMonitoringVersion] = useState(0);
+  const [monitoringStatus, setMonitoringStatus] = useState("connecting");
+  const [monitoringError, setMonitoringError] = useState("");
 
   const refreshAlerts = useCallback(async () => {
-    if (user?.role === "admin") {
+    if (user?.role === "admin" || user?.role === "superadmin") {
       const { total } = await adminApi.get("/alerts?limit=1&status=open");
       setAlertCount(total);
       setAlertError("");
       return;
     }
     const logs = await api.getHistory();
-    setAlertCount(logs.filter((log) => log.result === "modified" && !log.reviewed).length);
+    setAlertCount(logs.filter((log) => !log.reviewed &&
+      (log.result === "modified" || ["malicious", "harmful"].includes(log.securityStatus))).length);
     setAlertError("");
   }, [user?.role]);
 
@@ -42,12 +47,41 @@ function AppLayout({ user, onSignOut }) {
     });
   }, [refreshAlerts]);
 
+  const handleMonitoringEvent = useCallback((event) => {
+    setMonitoringVersion((version) => version + 1);
+    if (event.severity === "high" || event.severity === "warning") {
+      const eventName = event.event.replaceAll(".", " ");
+      const message = event.details?.fileName
+        ? `${event.details.fileName}: ${eventName}`
+        : `Security activity: ${eventName}`;
+      toast(message, event.severity === "high" ? "error" : "warning");
+    }
+    refreshAlerts().catch((error) => {
+      setAlertError(error instanceof Error ? error.message : "Could not refresh alerts.");
+    });
+  }, [refreshAlerts, toast]);
+
+  const handleMonitoringStatus = useCallback((status, message) => {
+    setMonitoringStatus(status);
+    setMonitoringError(message);
+  }, []);
+
+  useEffect(() => {
+    const connection = api.subscribeToMonitoring(handleMonitoringEvent, handleMonitoringStatus);
+    return () => connection.abort();
+  }, [user?.id, handleMonitoringEvent, handleMonitoringStatus]);
+
   return (
     <div className="app-shell">
       <Navbar alertCount={alertCount} user={user} onSignOut={onSignOut} />
       <main className="app-main">
         {alertError && <p role="alert" className="mb-4 text-bad">{alertError}</p>}
-        <Outlet context={{ refreshAlerts }} />
+        <p className={`monitoring-status monitoring-${monitoringStatus}`} role="status" title={monitoringError || undefined}>
+          Live monitoring: {monitoringStatus === "connected" ? "Connected"
+            : monitoringStatus === "reconnecting" ? "Reconnecting"
+              : monitoringStatus === "error" ? "Unavailable" : "Connecting"}
+        </p>
+        <Outlet context={{ refreshAlerts, monitoringVersion }} />
       </main>
     </div>
   );

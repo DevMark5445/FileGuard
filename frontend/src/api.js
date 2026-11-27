@@ -38,6 +38,79 @@ function assertAuthenticated() {
 }
 
 export const api = {
+  subscribeToMonitoring(onEvent, onStatus) {
+    const controller = new AbortController();
+    const { signal } = controller;
+
+    async function connect() {
+      let retryDelay = 1000;
+      while (!signal.aborted) {
+        try {
+          const token = window.localStorage.getItem("fg_token");
+          if (!token) {
+            onStatus("error", "Sign in to restore the monitoring connection.");
+            return;
+          }
+          const response = await fetch(`${API_BASE_URL}/monitoring`, {
+            headers: { Authorization: ["Bearer", token].join(" ") },
+            cache: "no-store",
+            signal,
+          });
+          if (response.status === 401 || response.status === 403) {
+            onStatus("error", "Your session cannot access live monitoring. Sign in again.");
+            return;
+          }
+          if (!response.ok) throw new Error(`Monitoring stream returned HTTP ${response.status}.`);
+          if (!response.body) throw new Error("This browser does not support live monitoring streams.");
+
+          onStatus("connected", "");
+          retryDelay = 1000;
+          const reader = response.body.getReader();
+          const decoder = new TextDecoder();
+          let buffer = "";
+
+          while (!signal.aborted) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buffer = (buffer + decoder.decode(value, { stream: true })).replace(/\r\n/g, "\n");
+            let boundary = buffer.indexOf("\n\n");
+            while (boundary !== -1) {
+              const frame = buffer.slice(0, boundary);
+              buffer = buffer.slice(boundary + 2);
+              const data = frame.split("\n")
+                .filter((line) => line.startsWith("data:"))
+                .map((line) => line.slice(5).trimStart())
+                .join("\n");
+              if (data) onEvent(JSON.parse(data));
+              boundary = buffer.indexOf("\n\n");
+            }
+          }
+          if (!signal.aborted) throw new Error("The monitoring connection closed.");
+        } catch (error) {
+          if (signal.aborted) return;
+          const message = error instanceof Error ? error.message : "The monitoring connection failed.";
+          onStatus("reconnecting", message);
+          await new Promise((resolve) => {
+            const onAbort = () => {
+              window.clearTimeout(timer);
+              signal.removeEventListener("abort", onAbort);
+              resolve();
+            };
+            const timer = window.setTimeout(() => {
+              signal.removeEventListener("abort", onAbort);
+              resolve();
+            }, retryDelay);
+            signal.addEventListener("abort", onAbort, { once: true });
+          });
+          retryDelay = Math.min(retryDelay * 2, 30000);
+        }
+      }
+    }
+
+    connect();
+    return controller;
+  },
+
   async getFilePolicy() {
     assertAuthenticated();
     return request("/files/policy");

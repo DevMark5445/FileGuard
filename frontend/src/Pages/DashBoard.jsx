@@ -1,4 +1,5 @@
-import { Link } from "react-router-dom";
+import { Link, useOutletContext } from "react-router-dom";
+import { useEffect } from "react";
 import { api } from "../api";
 import LogTable from "../components/LogTable";
 import { ErrorText, PageHead, Panel, Spinner, Stat } from "../components/UI";
@@ -7,7 +8,11 @@ import useLoad from "../hooks/useLoad";
 const load = () => Promise.all([api.getFiles(), api.getHistory()]);
 
 export default function Dashboard() {
-  const { data: [files, logs], loading, error } = useLoad(load, [[], []]);
+  const { monitoringVersion } = useOutletContext();
+  const { data: [files, logs], loading, error, reload } = useLoad(load, [[], []]);
+  useEffect(() => {
+    if (monitoringVersion > 0) reload();
+  }, [monitoringVersion, reload]);
   if (loading) return <Spinner />;
   if (error) return <ErrorText>{error}</ErrorText>;
   const mod = logs.filter((l) => l.result === "modified");

@@ -130,6 +130,12 @@ When SMTP is configured and security notifications are enabled, active admins
 and super admins also receive email notifications. Alerts preserve the source
 activity record while their investigation notes and status are managed
 separately.
+Authenticated dashboards receive activity updates over a server-sent event
+stream at `/api/monitoring`. Standard users receive only their own activity;
+admins and super admins receive system-wide activity. The frontend reconnects
+automatically if the stream is interrupted. Activity broadcasts are local to
+the API process; multi-instance deployments need shared pub/sub for events
+created by other instances.
 Super-admin MFA uses an authenticator app; the secret is encrypted at rest with
 a key derived from `JWT_SECRET`. Ten one-time recovery codes are shown once
 during setup. Store them securely. Rotating `JWT_SECRET` requires setting up

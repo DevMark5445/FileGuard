@@ -3,6 +3,7 @@ const User = require("../models/User");
 const SystemSetting = require("../models/SystemSetting");
 const SecurityAlert = require("../models/SecurityAlert");
 const nodemailer = require("nodemailer");
+const { publishMonitoringEvent } = require("../services/monitoringStream");
 
 async function recordActivity(req, entry) {
   const { _id, id, email } = req.user || {};
@@ -26,6 +27,8 @@ async function recordActivity(req, entry) {
       severity: entry.severity === "high" ? "high" : "warning",
     });
   }
+
+  publishMonitoringEvent(activity);
 
   const notify = entry.severity === "high" || alertEvent || flaggedVerification;
   const smtpConfigured = ["SMTP_HOST", "SMTP_PORT", "SMTP_USER", "SMTP_PASSWORD", "SMTP_FROM"]
